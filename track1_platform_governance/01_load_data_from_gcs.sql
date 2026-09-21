@@ -1,22 +1,11 @@
 -- =============================================================================
--- Track 1 (Option A — 100% Pure SQL, Zero Python):
--- Native BigQuery `LOAD DATA INTO` + `00_create_8_tables_ddl_with_descriptions.sql`
---
--- Why this is the best approach for ACSM SQL/BI Engineers:
--- 1. Step 1: Run `00_create_8_tables_ddl_with_descriptions.sql` first.
---    That DDL pre-creates all 8 tables (`T1_Fact_EP_Judge` .. `T8_dimProduct`)
---    with 100% of Table Descriptions and all 226 Column Descriptions already
---    stored in BigQuery's catalog.
--- 2. Step 2: Run the pure SQL `LOAD DATA INTO` statements below from a GCS bucket.
---    Because the tables and column descriptions already exist, `LOAD DATA OVERWRITE`
---    (or `LOAD DATA INTO`) loads the `.csv.gz` data directly while PRESERVING
---    all 226 column descriptions and table descriptions automatically!
+-- DEMO FLOW 2 (STEP 2 OF 2): Serverless SQL `LOAD DATA OVERWRITE` from GCS
+-- Loads all 1,398,284 records from `gs://acsm-workshop-landing-trustedtesterarvind`
+-- into the 8 pre-created tables while preserving all 226 column descriptions.
+-- Zero compute provisioning required | $0 BigQuery batch load cost (0 B billed).
 -- =============================================================================
 
--- Replace `gs://acsm-workshop-landing-trustedtesterarvind/full_compressed/`
--- with your Cloud Storage bucket URI where the `.csv.gz` files are uploaded.
-
--- 1. T1_Fact_EP_Judge (140,000 rows | 60 columns described)
+-- Load T1_Fact_EP_Judge
 LOAD DATA OVERWRITE `trustedtesterarvind.acsm_bronze.T1_Fact_EP_Judge`
 FROM FILES (
   format = 'CSV',
@@ -25,7 +14,7 @@ FROM FILES (
   allow_quoted_newlines = TRUE
 );
 
--- 2. T2_Fact_EP_Sales (119,859 rows | 9 columns described)
+-- Load T2_Fact_EP_Sales
 LOAD DATA OVERWRITE `trustedtesterarvind.acsm_bronze.T2_Fact_EP_Sales`
 FROM FILES (
   format = 'CSV',
@@ -34,7 +23,7 @@ FROM FILES (
   allow_quoted_newlines = TRUE
 );
 
--- 3. T3_Fact_EP_Collection (80,000 rows | 21 columns described)
+-- Load T3_Fact_EP_Collection
 LOAD DATA OVERWRITE `trustedtesterarvind.acsm_bronze.T3_Fact_EP_Collection`
 FROM FILES (
   format = 'CSV',
@@ -43,7 +32,7 @@ FROM FILES (
   allow_quoted_newlines = TRUE
 );
 
--- 4. T4_Fact_CC_Judge (227,500 rows | 54 columns described)
+-- Load T4_Fact_CC_Judge
 LOAD DATA OVERWRITE `trustedtesterarvind.acsm_bronze.T4_Fact_CC_Judge`
 FROM FILES (
   format = 'CSV',
@@ -52,7 +41,7 @@ FROM FILES (
   allow_quoted_newlines = TRUE
 );
 
--- 5. T5_Fact_CC_Sales (535,925 rows | 9 columns described)
+-- Load T5_Fact_CC_Sales
 LOAD DATA OVERWRITE `trustedtesterarvind.acsm_bronze.T5_Fact_CC_Sales`
 FROM FILES (
   format = 'CSV',
@@ -61,7 +50,7 @@ FROM FILES (
   allow_quoted_newlines = TRUE
 );
 
--- 6. T6_Fact_CC_Collection (130,000 rows | 17 columns described)
+-- Load T6_Fact_CC_Collection
 LOAD DATA OVERWRITE `trustedtesterarvind.acsm_bronze.T6_Fact_CC_Collection`
 FROM FILES (
   format = 'CSV',
@@ -70,7 +59,7 @@ FROM FILES (
   allow_quoted_newlines = TRUE
 );
 
--- 7. T7_m3CIF (100,000 rows | 34 columns described)
+-- Load T7_m3CIF
 LOAD DATA OVERWRITE `trustedtesterarvind.acsm_bronze.T7_m3CIF`
 FROM FILES (
   format = 'CSV',
@@ -79,7 +68,7 @@ FROM FILES (
   allow_quoted_newlines = TRUE
 );
 
--- 8. T8_dimProduct (65,000 rows | 22 columns described)
+-- Load T8_dimProduct
 LOAD DATA OVERWRITE `trustedtesterarvind.acsm_bronze.T8_dimProduct`
 FROM FILES (
   format = 'CSV',
