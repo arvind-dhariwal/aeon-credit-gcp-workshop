@@ -1,12 +1,12 @@
 -- =============================================================================
--- BigQuery DDL: 8 ACSM Core Tables (T1–T8) in Project `trsutedtesterarvind`
+-- BigQuery DDL: 8 ACSM Core Tables (T1–T8) in Project `trustedtesterarvind`
 -- Auto-generated with 100% Table & Column Descriptions from `Mock Metadata.xlsx`
 -- =============================================================================
 
-CREATE SCHEMA IF NOT EXISTS `trsutedtesterarvind.acsm_bronze`
+CREATE SCHEMA IF NOT EXISTS `trustedtesterarvind.acsm_bronze`
 OPTIONS (description = "AEON Credit Service Malaysia (ACSM) — 8 Core Tables (T1-T8) with Governed Metadata");
 
-CREATE TABLE IF NOT EXISTS `trsutedtesterarvind.acsm_bronze.T1_Fact_EP_Judge` (
+CREATE TABLE IF NOT EXISTS `trustedtesterarvind.acsm_bronze.T1_Fact_EP_Judge` (
   `Rcd_DT` STRING OPTIONS(description = "Data extraction date"),
   `CIF_NO` FLOAT64 OPTIONS(description = "Unique customer ID"),
   `APPL_NO` STRING OPTIONS(description = "PRODUCT application number"),
@@ -69,7 +69,7 @@ CREATE TABLE IF NOT EXISTS `trsutedtesterarvind.acsm_bronze.T1_Fact_EP_Judge` (
   `PreAssessment_Flag` STRING OPTIONS(description = "Some customers qualify for pre-assessment")
 ) OPTIONS(description = "The current (daily full refreshed) application status (Approved or Rejected) for EP products.");
 
-CREATE TABLE IF NOT EXISTS `trsutedtesterarvind.acsm_bronze.T2_Fact_EP_Sales` (
+CREATE TABLE IF NOT EXISTS `trustedtesterarvind.acsm_bronze.T2_Fact_EP_Sales` (
   `TX_DT` FLOAT64 OPTIONS(description = "Sales Date"),
   `CIF_No` STRING OPTIONS(description = "Unique customer ID"),
   `TransactionCountry` STRING OPTIONS(description = "Ringgit Malaysia"),
@@ -81,7 +81,7 @@ CREATE TABLE IF NOT EXISTS `trsutedtesterarvind.acsm_bronze.T2_Fact_EP_Sales` (
   `TransCount` FLOAT64 OPTIONS(description = "Transaction Count")
 ) OPTIONS(description = "The confirmed sales log of the EP product.");
 
-CREATE TABLE IF NOT EXISTS `trsutedtesterarvind.acsm_bronze.T3_Fact_EP_Collection` (
+CREATE TABLE IF NOT EXISTS `trustedtesterarvind.acsm_bronze.T3_Fact_EP_Collection` (
   `TX_DT` FLOAT64 OPTIONS(description = "Reporting date"),
   `First_INST_DT` FLOAT64 OPTIONS(description = "First intallment date"),
   `Agree_No` STRING OPTIONS(description = "Loan agreement ID"),
@@ -105,7 +105,7 @@ CREATE TABLE IF NOT EXISTS `trsutedtesterarvind.acsm_bronze.T3_Fact_EP_Collectio
   `Unpaid_Count` FLOAT64 OPTIONS(description = "Principal Unpaid count")
 ) OPTIONS(description = "The collection status snapshot for EP products as at closing period");
 
-CREATE TABLE IF NOT EXISTS `trsutedtesterarvind.acsm_bronze.T4_Fact_CC_Judge` (
+CREATE TABLE IF NOT EXISTS `trustedtesterarvind.acsm_bronze.T4_Fact_CC_Judge` (
   `Rcd_DT` STRING OPTIONS(description = "Data extraction date"),
   `Account_No` STRING OPTIONS(description = "Card account number"),
   `Appl_ID` STRING OPTIONS(description = "Credit card application ID"),
@@ -162,7 +162,7 @@ CREATE TABLE IF NOT EXISTS `trsutedtesterarvind.acsm_bronze.T4_Fact_CC_Judge` (
   `ProposedCardBiz_ID` STRING OPTIONS(description = "Proposed card ID")
 ) OPTIONS(description = "The current (daily full refreshed) application status (Approved or Rejected) for credit cards.");
 
-CREATE TABLE IF NOT EXISTS `trsutedtesterarvind.acsm_bronze.T5_Fact_CC_Sales` (
+CREATE TABLE IF NOT EXISTS `trustedtesterarvind.acsm_bronze.T5_Fact_CC_Sales` (
   `TX_DT` FLOAT64 OPTIONS(description = "Sales Date"),
   `CIF_No` STRING OPTIONS(description = "Unique customer ID"),
   `TransactionCountry` STRING OPTIONS(description = "Ringgit Malaysia"),
@@ -174,7 +174,7 @@ CREATE TABLE IF NOT EXISTS `trsutedtesterarvind.acsm_bronze.T5_Fact_CC_Sales` (
   `TransCount` FLOAT64 OPTIONS(description = "Transaction Count")
 ) OPTIONS(description = "The actual spending & cash advance log on credit card");
 
-CREATE TABLE IF NOT EXISTS `trsutedtesterarvind.acsm_bronze.T6_Fact_CC_Collection` (
+CREATE TABLE IF NOT EXISTS `trustedtesterarvind.acsm_bronze.T6_Fact_CC_Collection` (
   `TX_DT` FLOAT64 OPTIONS(description = "Reporting date"),
   `Account_No` STRING OPTIONS(description = "CC account ID"),
   `CIF_No` STRING OPTIONS(description = "Unique customer ID"),
@@ -194,7 +194,7 @@ CREATE TABLE IF NOT EXISTS `trsutedtesterarvind.acsm_bronze.T6_Fact_CC_Collectio
   `Maintain_Count` FLOAT64 OPTIONS(description = "Maintain count")
 ) OPTIONS(description = "The billing and collection status snapshot for credit cards as at closing period");
 
-CREATE TABLE IF NOT EXISTS `trsutedtesterarvind.acsm_bronze.T7_m3CIF` (
+CREATE TABLE IF NOT EXISTS `trustedtesterarvind.acsm_bronze.T7_m3CIF` (
   `Rcd_DT` STRING OPTIONS(description = "Record refresh date"),
   `CIF_ID` STRING OPTIONS(description = "Customer ID"),
   `CIF_NM` STRING OPTIONS(description = "Customer name"),
@@ -231,7 +231,7 @@ CREATE TABLE IF NOT EXISTS `trsutedtesterarvind.acsm_bronze.T7_m3CIF` (
   `EmpSts` INT64 OPTIONS(description = "Employment Status")
 ) OPTIONS(description = "Customer latest status daily refresh table");
 
-CREATE TABLE IF NOT EXISTS `trsutedtesterarvind.acsm_bronze.T8_dimProduct` (
+CREATE TABLE IF NOT EXISTS `trustedtesterarvind.acsm_bronze.T8_dimProduct` (
   `Expiry_DT` STRING OPTIONS(description = "Card expiry date"),
   `FirstSpend_DT` STRING OPTIONS(description = "First spend date"),
   `Block_Code` STRING OPTIONS(description = "If card is blocked"),
