@@ -1,20 +1,13 @@
 #!/usr/bin/env python3
 """Track 1: Automated Ingestion & Metadata Enrichment from Mock Metadata.xlsx.
 
-Loads ACSM Mock Datasets (T1–T8 CSVs) into BigQuery `acsm_bronze`, then parses
-all 8 worksheets of `Mock Metadata.xlsx` (~220 columns) to automatically populate
-table descriptions and column-level descriptions in BigQuery / Dataplex Catalog.
-
-Fulfils ACSM RFP Clauses:
-- C1.1.1.2 (Diverse ingestion)
-- C1.1.1.8 (Enterprise Unified Governance)
-- C1.1.1.10 (Metadata Management & Business Glossary enrichment)
-- C1.1.2.7 (Data Trust — business definitions visible on every table/column)
-- C1.1.6.8 (Automated Metadata Migration)
+Loads ACSM Mock Datasets (T1–T8 from `./data/full_compressed/*.csv.gz` or `.csv`)
+into BigQuery `acsm_bronze`, then parses all 8 worksheets of `./data/Mock Metadata.xlsx`
+(~220 columns) to automatically populate table descriptions and column-level
+descriptions in BigQuery / Dataplex Catalog.
 """
 
 import argparse
-import io
 import os
 import pathlib
 import xml.etree.ElementTree as ET
@@ -23,42 +16,15 @@ from typing import Dict, List, Tuple
 from google.cloud import bigquery
 
 TABLE_FILE_MAP: Dict[str, Tuple[str, str]] = {
-    "t1_fact_ep_judge": (
-        "T1_Fact_EP_Judge.csv",
-        "T1 - Fact_EP_Judge",
-    ),
-    "t2_fact_ep_sales": (
-        "T2_Fact_EP_Sales.csv",
-        "T2 - Fact_EP_Sales",
-    ),
-    "t3_fact_ep_collection": (
-        "T3_Fact_EP_Collection.csv",
-        "T3 - Fact_EP_Collection",
-    ),
-    "t4_fact_cc_judge": (
-        "T4_Fact_CC_Judge.csv",
-        "T4 - Fact_CC_Judge",
-    ),
-    "t4_fact_cc_judge_v2": (
-        "T4_Fact_CC_Judge_v2.csv",
-        "T4 - Fact_CC_Judge",
-    ),
-    "t5_fact_cc_sales": (
-        "T5_Fact_CC_Sales.csv",
-        "T5 - Fact_CC_Sales",
-    ),
-    "t6_fact_cc_collection": (
-        "T6_Fact_CC_Collection.csv",
-        "T6 - Fact_CC_Collection",
-    ),
-    "t7_m3cif": (
-        "T7_m3CIF.csv",
-        "T7 - m3CIF",
-    ),
-    "t8_dim_product": (
-        "T8_dimProduct.csv",
-        "T8 - dimProduct",
-    ),
+    "t1_fact_ep_judge": ("T1_Fact_EP_Judge.csv", "T1 - Fact_EP_Judge"),
+    "t2_fact_ep_sales": ("T2_Fact_EP_Sales.csv", "T2 - Fact_EP_Sales"),
+    "t3_fact_ep_collection": ("T3_Fact_EP_Collection.csv", "T3 - Fact_EP_Collection"),
+    "t4_fact_cc_judge": ("T4_Fact_CC_Judge.csv", "T4 - Fact_CC_Judge"),
+    "t4_fact_cc_judge_v2": ("T4_Fact_CC_Judge_v2.csv", "T4 - Fact_CC_Judge"),
+    "t5_fact_cc_sales": ("T5_Fact_CC_Sales.csv", "T5 - Fact_CC_Sales"),
+    "t6_fact_cc_collection": ("T6_Fact_CC_Collection.csv", "T6 - Fact_CC_Collection"),
+    "t7_m3cif": ("T7_m3CIF.csv", "T7 - m3CIF"),
+    "t8_dim_product": ("T8_dimProduct.csv", "T8 - dimProduct"),
 }
 
 
@@ -89,7 +55,7 @@ def parse_mock_metadata_xlsx(
           "{http://schemas.openxmlformats.org/officeDocument/2006/relationships}id"
       ]
       target = "xl/" + rel_map[rid].lstrip("/")
-      sxml = ET.fromstring(z.read(target))
+      sxml = ET.fromstring(z.read("xl/" + rel_map[rid].lstrip("/")))
       table_desc = ""
       col_map: Dict[str, str] = {}
 
@@ -123,8 +89,9 @@ def parse_mock_metadata_xlsx(
 
 
 def main() -> None:
+  repo_root = pathlib.Path(__file__).resolve().parent.parent
   parser = argparse.ArgumentParser(
-      description="Load ACSM T1-T8 CSVs and apply Mock Metadata.xlsx glossary."
+      description="Load ACSM T1-T8 CSVs from ./data and apply Mock Metadata.xlsx glossary."
   )
   parser.add_argument(
       "--project_id",
@@ -135,7 +102,7 @@ def main() -> None:
       "--location",
       default=os.environ.get("GOOGLE_CLOUD_LOCATION", "asia-southeast1"),
   )
-  parser.add_argument("--data_dir", required=True)
+  parser.add_argument("--data_dir", default=str(repo_root / "data"))
   args = parser.parse_args()
 
   data_dir = pathlib.Path(args.data_dir)
@@ -158,9 +125,18 @@ def main() -> None:
     print(f"[OK] Verified dataset {ds_id} ({args.location})")
 
   for table_name, (csv_file, sheet_key) in TABLE_FILE_MAP.items():
-    csv_path = data_dir / csv_file
-    if not csv_path.exists():
-      print(f"[SKIP] {csv_path} not found locally.")
+    gz_candidate = data_dir / "full_compressed" / f"{csv_file}.gz"
+    raw_candidate = data_dir / csv_file
+    sample_candidate = data_dir / "samples" / csv_file
+
+    if gz_candidate.exists():
+      target_file = gz_candidate
+    elif raw_candidate.exists():
+      target_file = raw_candidate
+    elif sample_candidate.exists():
+      target_file = sample_candidate
+    else:
+      print(f"[SKIP] {csv_file} not found in {data_dir}")
       continue
 
     table_id = f"{client.project}.acsm_bronze.{table_name}"
@@ -170,7 +146,7 @@ def main() -> None:
         autodetect=True,
         write_disposition=bigquery.WriteDisposition.WRITE_TRUNCATE,
     )
-    with open(csv_path, "rb") as f:
+    with open(target_file, "rb") as f:
       job = client.load_table_from_file(f, table_id, job_config=job_config)
     job.result()
 
@@ -178,7 +154,7 @@ def main() -> None:
     if sheet_key in parsed_meta:
       table_desc, col_map = parsed_meta[sheet_key]
       table.description = (
-          f"{table_desc} (Governed via Mock Metadata.xlsx | Source: {csv_file})"
+          f"{table_desc} (Governed via Mock Metadata.xlsx | Source: {target_file.name})"
       )
       new_schema = []
       for field in table.schema:
@@ -195,8 +171,8 @@ def main() -> None:
       table.schema = new_schema
       client.update_table(table, ["description", "schema"])
     print(
-        f"[LOADED & ENRICHED] {table_id}: {table.num_rows:,} rows, "
-        f"{len(table.schema)} governed columns"
+        f"[LOADED & ENRICHED] {table_id} from {target_file.name}: "
+        f"{table.num_rows:,} rows, {len(table.schema)} governed columns"
     )
 
 
