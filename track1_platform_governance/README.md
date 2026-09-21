@@ -49,7 +49,7 @@ bq query --project_id="${PROJECT_ID}" --use_legacy_sql=false \
 ```
 > **Result**: Creates the `acsm_bronze` dataset and all 8 tables (`T1_Fact_EP_Judge` .. `T8_dimProduct`) with **100% of Table Descriptions and all 226 Column Descriptions** stored in BigQuery's catalog.
 
-### Step 5: Run the Serverless `LOAD DATA OVERWRITE` Statement
+### Step 5: Run the Serverless `LOAD DATA OVERWRITE` Statement (**$0 Load Cost / `0 B Billed`**)
 In **BigQuery Studio** (or via `bq query`), run:
 - **File**: [`track1_platform_governance/01_load_data_from_gcs.sql`](./01_load_data_from_gcs.sql)
 
@@ -58,4 +58,9 @@ In **BigQuery Studio** (or via `bq query`), run:
 bq query --project_id="${PROJECT_ID}" --use_legacy_sql=false \
   < track1_platform_governance/01_load_data_from_gcs.sql
 ```
-> **Result**: BigQuery automatically decompresses the 8 `.csv.gz` files from `gs://acsm-workshop-landing-trustedtesterarvind/full_compressed/`, loads all **1,398,284 rows** at **$0 compute cost (`0 B billed`)**, and **automatically preserves all 226 column descriptions and table descriptions** created in Step 4.
+
+> [!IMPORTANT]
+> **Zero Compute Cost (`$0.00` / `0 Bytes Billed`) to Load Data into BigQuery**
+> - **Official BigQuery Pricing ([BigQuery Data Ingestion Pricing](https://cloud.google.com/bigquery/pricing#loading_data))**: Batch loading data into BigQuery from Cloud Storage (via the `LOAD DATA` SQL statement, `bq load` CLI, or Load Jobs API) is **100% FREE (`$0.00`)** using BigQuery's default **shared slot pool**.
+> - **What to Show ACSM in BigQuery Studio**: After clicking **Run** on `01_load_data_from_gcs.sql`, click the **Job Information** tab in BigQuery Studio and point out **`Bytes billed: 0 B`**.
+> - **Zero Infrastructure + Preserved Governance**: BigQuery automatically decompresses all 8 `.csv.gz` files, loads all **1,398,284 rows** at **$0 ingestion compute cost**, and **preserves 100% of the 226 column descriptions and table descriptions** created in Step 4. *(Note: Standard BigQuery storage rates apply after ingestion, with the first 10 GB/month free; the shared batch pool is used automatically unless a dedicated `LOAD` slot reservation is explicitly assigned).*
