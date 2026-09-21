@@ -1,0 +1,93 @@
+# =============================================================================
+# TRACK 3: BIGQUERY CONVERSATIONAL ANALYTICS (BQCA) CONFIGURATION
+# Fulfils ACSM RFP Clauses C1.1.2.9, C1.1.2.10, and Annexure M (M1.4.2, M1.4.4)
+# Empowers ACSM's 65% non-technical business user cohort to self-serve insights
+# without filing part of the 150 daily ad-hoc SQL request tickets.
+# =============================================================================
+
+agent_name: "ACSM AEON360 Conversational Analytics Agent"
+target_datasets:
+  - "acsm_gold.gold_customer_360"
+  - "acsm_gold.gold_underwriting_funnel"
+  - "acsm_gold.gold_collections_risk"
+  - "acsm_silver.recon_audit_log"
+
+system_instructions: |
+  You are the official AEON360 Conversational Analytics Assistant for AEON Credit Service (M) Berhad (ACSM).
+  All monetary amounts are in Malaysian Ringgit (MYR / RM).
+  Always use these domain definitions:
+  - EP: Easy Payment (installment financing for motorcycles, appliances, and personal financing).
+  - CC: Credit Card products (Platinum, Gold, Silver, Basic tiers).
+  - CIF_ID: Customer Information File unique customer identifier from m3CIF.
+  - OSP: Outstanding Principal balance (Billing_OSP = billed principal, Collection_OSP = collected principal, Unpaid_OSP = overdue unpaid principal).
+  - Collection Efficiency Ratio: SAFE_DIVIDE(SUM(collection_osp_myr), SUM(billing_osp_myr)).
+  - AKPK: Agensi Kaunseling dan Pengurusan Kredit (Malaysian credit counseling and debt restructuring program; akpk_status = 'Y' indicates debt restructuring).
+  - DSR: Debt Service Ratio (monthly debt obligations divided by net income).
+  - FinPlus: ACSM's internal e-credit evaluation tier (finplus_tier).
+  - FELDA: Federal Land Development Authority rural Malaysian customer segment (felda_program_flag = 'Y').
+
+golden_sql_examples:
+  - id: "Q01_PORTFOLIO_DELINQUENCY_BY_STATE"
+    question: "What is our total Billing OSP, Collection OSP, Unpaid OSP, and Collection Efficiency Ratio across Malaysian states?"
+    sql: |
+      SELECT
+        state,
+        product_line,
+        ROUND(SUM(billing_osp_myr), 2) AS total_billing_osp_myr,
+        ROUND(SUM(collection_osp_myr), 2) AS total_collection_osp_myr,
+        ROUND(SUM(unpaid_osp_myr), 2) AS total_unpaid_osp_myr,
+        ROUND(SAFE_DIVIDE(SUM(collection_osp_myr), NULLIF(SUM(billing_osp_myr), 0)) * 100, 2) AS collection_efficiency_pct
+      FROM `acsm_gold.gold_collections_risk`
+      GROUP BY state, product_line
+      ORDER BY total_unpaid_osp_myr DESC;
+
+  - id: "Q02_WALLET_TIER_UTILIZATION_AND_AKPK"
+    question: "Break down credit purchase limit, usage, average utilization rate, and AKPK restructuring count by Wallet Tier."
+    sql: |
+      SELECT
+        wallet_tier,
+        COUNT(DISTINCT cif_id) AS total_customers,
+        COUNTIF(akpk_status = 'Y') AS akpk_restructured_customers,
+        ROUND(SUM(total_cp_limit_myr), 2) AS total_credit_limit_myr,
+        ROUND(SUM(total_cp_usage_myr), 2) AS total_credit_usage_myr,
+        ROUND(AVG(credit_utilization_ratio) * 100, 2) AS avg_utilization_pct
+      FROM `acsm_gold.gold_customer_360`
+      WHERE total_cards_held > 0
+      GROUP BY wallet_tier
+      ORDER BY total_credit_limit_myr DESC;
+
+  - id: "Q03_UNDERWRITING_APPROVAL_FUNNEL"
+    question: "Compare credit application volume, average credit score, and average DSR between Easy Payment (EP) and Credit Cards (CC) by channel."
+    sql: |
+      SELECT
+        product_line,
+        application_channel,
+        decision_status,
+        COUNT(*) AS application_count,
+        ROUND(AVG(credit_score), 1) AS avg_credit_score,
+        ROUND(AVG(new_dsr), 2) AS avg_new_dsr,
+        ROUND(SUM(requested_or_approved_exposure_myr), 2) AS total_exposure_myr
+      FROM `acsm_gold.gold_underwriting_funnel`
+      GROUP BY product_line, application_channel, decision_status
+      ORDER BY product_line, application_count DESC;
+
+  - id: "Q04_EP_TO_CC_CROSS_SELL_CANDIDATES"
+    question: "Find top Easy Payment (EP) customers with zero unpaid delinquency, net income above RM 5,000, and DSR below 40% who do not hold a Credit Card yet."
+    sql: |
+      SELECT
+        cif_id,
+        state,
+        occupation,
+        net_income_myr,
+        debt_service_ratio_dsr,
+        total_ep_financed_myr,
+        total_ep_spend_myr
+      FROM `acsm_gold.gold_customer_360`
+      WHERE total_cards_held = 0
+        AND ep_applications_count > 0
+        AND NOT has_unpaid_delinquency
+        AND net_income_myr >= 5000
+        AND debt_service_ratio_dsr <= 40
+        AND pdpa_marketing_consent_flag = 'Y'
+      ORDER BY net_income_myr DESC
+      LIMIT 50;
