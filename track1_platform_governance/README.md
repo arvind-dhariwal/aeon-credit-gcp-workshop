@@ -1,4 +1,4 @@
-# Track 1: Data Platform & Governance — Serverless BigQuery Ingestion (Demo Flow 2)
+# Serverless Seamless Data Ingestion into BigQuery (Notebook & SQL Guide)
 
 This guide follows the zero-service-provisioning workflow for creating and loading the **8 AEON Credit Service Malaysia (ACSM) tables (`1,398,284` rows)** along with **100% of their table descriptions and 226 column descriptions** from `Mock Metadata.xlsx` in the **Singapore (`asia-southeast1`)** region.
 
