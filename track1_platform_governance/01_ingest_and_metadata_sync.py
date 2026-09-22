@@ -239,7 +239,7 @@ def main() -> None:
   )
   parser.add_argument(
       "--location",
-      default=os.environ.get("GOOGLE_CLOUD_LOCATION", "US"),
+      default=os.environ.get("GOOGLE_CLOUD_LOCATION", "asia-southeast1"),
   )
   parser.add_argument("--data_dir", default=str(repo_root / "data"))
   args = parser.parse_args()

@@ -1,11 +1,15 @@
 -- =============================================================================
 -- DEMO FLOW 2 (STEP 1 OF 2): Create 8 ACSM Tables with Table & Column Descriptions
--- Project: `trustedtesterarvind` | Dataset: `acsm_bronze`
+-- Project: `<PROJECT_ID>` (e.g. `trustedtesterarvind`) | Dataset: `acsm_bronze`
+-- Location: `asia-southeast1` (Singapore)
 -- Source Dictionary: `Mock Metadata.xlsx` (8 tables, 226 described columns)
 -- =============================================================================
 
 CREATE SCHEMA IF NOT EXISTS `trustedtesterarvind.acsm_bronze`
-OPTIONS (description = "AEON Credit Service Malaysia (ACSM) — 8 Core Tables (T1-T8) with Governed Metadata");
+OPTIONS (
+  location = "asia-southeast1",
+  description = "AEON Credit Service Malaysia (ACSM) — 8 Core Tables (T1-T8) with Governed Metadata (Singapore Region)"
+);
 
 CREATE OR REPLACE TABLE `trustedtesterarvind.acsm_bronze.T1_Fact_EP_Judge` (
   `Rcd_DT` DATE OPTIONS(description = "Data extraction date [Source Data Type: date]"),
