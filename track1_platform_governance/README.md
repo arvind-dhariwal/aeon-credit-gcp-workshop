@@ -16,6 +16,59 @@ flowchart LR
 
 ---
 
+### Step 0 (Prerequisite for BigQuery Studio Notebook): Create VPC Network & Singapore Subnetwork in Cloud Shell First
+If running the **[`ACSM_Track1_Serverless_Seamless_Data_Ingestion.ipynb`](./ACSM_Track1_Serverless_Seamless_Data_Ingestion.ipynb)** notebook inside **BigQuery Studio**, open **Google Cloud Shell (`>_`)** first and run the commands below once to create the VPC Network (`acsm-colab-network`), Singapore Subnetwork (`acsm-colab-subnet-sg` with Private Google Access), and Cloud NAT (`acsm-colab-nat-sg`). Then return to BigQuery Studio and connect the notebook runtime.
+
+```bash
+export PROJECT_ID="<YOUR_GCP_PROJECT_ID>"   # e.g., export PROJECT_ID="trustedtesterarvind"
+export LOCATION="asia-southeast1"           # Always Singapore (asia-southeast1)
+export NETWORK_NAME="acsm-colab-network"
+export SUBNET_NAME="acsm-colab-subnet-sg"
+
+gcloud config set project "${PROJECT_ID}"
+
+# 1. Enable required APIs for BigQuery Studio Notebooks (Colab Enterprise)
+gcloud services enable \
+  bigquery.googleapis.com \
+  aiplatform.googleapis.com \
+  compute.googleapis.com \
+  dataform.googleapis.com \
+  --project="${PROJECT_ID}"
+
+# 2. Create Custom VPC Network
+gcloud compute networks create "${NETWORK_NAME}" \
+  --project="${PROJECT_ID}" \
+  --subnet-mode=custom
+
+# 3. Create Regional Subnetwork in Singapore (asia-southeast1) with Private Google Access
+gcloud compute networks subnets create "${SUBNET_NAME}" \
+  --project="${PROJECT_ID}" \
+  --network="${NETWORK_NAME}" \
+  --region="${LOCATION}" \
+  --range="10.10.0.0/24" \
+  --enable-private-ip-google-access
+
+# 4. Create Cloud Router & Cloud NAT in Singapore (allows git clone from GitHub without public IPs)
+gcloud compute routers create "acsm-colab-router-sg" \
+  --project="${PROJECT_ID}" \
+  --network="${NETWORK_NAME}" \
+  --region="${LOCATION}"
+
+gcloud compute routers nats create "acsm-colab-nat-sg" \
+  --project="${PROJECT_ID}" \
+  --router="acsm-colab-router-sg" \
+  --region="${LOCATION}" \
+  --auto-allocate-nat-external-ips \
+  --nat-all-subnet-ip-ranges
+```
+
+> [!TIP]
+> **How to Verify Step 0 on GCP Console UI & Connect the Notebook Runtime**
+> 1. Open **[VPC network $\rightarrow$ VPC networks](https://console.cloud.google.com/networking/networks/list)** in the GCP Console and verify **`acsm-colab-network`** and subnet **`acsm-colab-subnet-sg`** (`Region: asia-southeast1`, `Private Google access: On`) are listed.
+> 2. Return to **BigQuery Studio**, open `ACSM_Track1_Serverless_Seamless_Data_Ingestion.ipynb`, click **Connect** (top-right) $\rightarrow$ select Network **`acsm-colab-network`** and Subnetwork **`acsm-colab-subnet-sg`** (`asia-southeast1`), and click **Connect**.
+
+---
+
 ### Step 1: Clone the Repository & Set Parameters
 Run in **Google Cloud Shell** (top-right `>_` icon in the GCP Console) or your workstation terminal:
 ```bash
