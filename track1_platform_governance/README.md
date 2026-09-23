@@ -73,7 +73,7 @@ gcloud compute routers nats create "acsm-colab-nat-sg" \
 Run in **Google Cloud Shell** (top-right `>_` icon in the GCP Console) or your workstation terminal:
 ```bash
 # 1. Clone the workshop repository
-git clone -b feature/acsm-e2e-workshop https://github.com/cloud-gtm/aeon-credit-gcp-workshop.git
+git clone https://github.com/arvind-dhariwal/aeon-credit-gcp-workshop.git
 cd aeon-credit-gcp-workshop
 
 # 2. Set your parameterized Project ID and Singapore Region (asia-southeast1)
