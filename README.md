@@ -63,8 +63,7 @@ flowchart TB
 ## 3. Quick Start (Singapore Region: `asia-southeast1`)
 
 ### Option A (Recommended): Run the Serverless Seamless Data Ingestion Notebook in BigQuery Studio UI
-1. Follow **[`track1_platform_governance/README.md`](./track1_platform_governance/README.md)** (`Step 0`) in **Google Cloud Shell** to create the VPC Network (`acsm-colab-network`) and Singapore Subnetwork (`acsm-colab-subnet-sg`).
-2. Upload/Open **[`track1_platform_governance/ACSM_Track1_Serverless_Seamless_Data_Ingestion.ipynb`](./track1_platform_governance/ACSM_Track1_Serverless_Seamless_Data_Ingestion.ipynb)** in **BigQuery Studio** (`asia-southeast1`) and click **Run All**.
+Open **[`track1_platform_governance/ACSM_Track1_Serverless_Seamless_Data_Ingestion.ipynb`](./track1_platform_governance/ACSM_Track1_Serverless_Seamless_Data_Ingestion.ipynb)** in **BigQuery Studio** (`asia-southeast1` Singapore), run the **Step 0** VPC/Subnet setup in Cloud Shell, and click **Run All**.
 
 ### Option B: Run via Cloud Shell (`Clone` $\rightarrow$ `Create Bucket` $\rightarrow$ `Copy .csv.gz` $\rightarrow$ `Create DDL` $\rightarrow$ `Load Data`)
 ```bash
