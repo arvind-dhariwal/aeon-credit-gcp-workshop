@@ -60,24 +60,26 @@ flowchart TB
 
 ---
 
-## 3. Quick Start
+## 3. Quick Start (Singapore Region: `asia-southeast1`)
 
-### Prerequisites
+### Option A (Recommended): Run the Serverless Seamless Data Ingestion Notebook in BigQuery Studio UI
+1. Follow **[`track1_platform_governance/README.md`](./track1_platform_governance/README.md)** (`Step 0`) in **Google Cloud Shell** to create the VPC Network (`acsm-colab-network`) and Singapore Subnetwork (`acsm-colab-subnet-sg`).
+2. Upload/Open **[`track1_platform_governance/ACSM_Track1_Serverless_Seamless_Data_Ingestion.ipynb`](./track1_platform_governance/ACSM_Track1_Serverless_Seamless_Data_Ingestion.ipynb)** in **BigQuery Studio** (`asia-southeast1`) and click **Run All**.
+
+### Option B: Run via Cloud Shell (`Clone` $\rightarrow$ `Create Bucket` $\rightarrow$ `Copy .csv.gz` $\rightarrow$ `Create DDL` $\rightarrow$ `Load Data`)
 ```bash
-export GOOGLE_CLOUD_PROJECT="your-gcp-project-id"
-export GOOGLE_CLOUD_LOCATION="asia-southeast1"
-export ACSM_DATA_DIR="/path/to/downloaded/acsm_mock_data"
-```
+export PROJECT_ID="<YOUR_GCP_PROJECT_ID>"   # e.g., export PROJECT_ID="trustedtesterarvind"
+export LOCATION="asia-southeast1"           # Always Singapore (asia-southeast1)
+export BUCKET_NAME="acsm-workshop-landing-${PROJECT_ID}"
 
-### Step 1 — Run Track 1 (Ingestion, Auto-Metadata from `Mock Metadata.xlsx`, Medallion & Reconciliation)
-```bash
-python3 track1_platform_governance/01_ingest_and_metadata_sync.py \
-  --project_id "${GOOGLE_CLOUD_PROJECT}" \
-  --location "${GOOGLE_CLOUD_LOCATION}" \
-  --data_dir "${ACSM_DATA_DIR}"
+gcloud storage buckets create "gs://${BUCKET_NAME}" --project="${PROJECT_ID}" --location="${LOCATION}" --uniform-bucket-level-access
+gcloud storage cp data/full_compressed/*.csv.gz "gs://${BUCKET_NAME}/full_compressed/"
 
-bq query --use_legacy_sql=false < track1_platform_governance/02_medallion_and_reconciliation.sql
-bq query --use_legacy_sql=false < track1_platform_governance/03_bnm_rmit_pdpa_security.sql
+sed "s/trustedtesterarvind/${PROJECT_ID}/g" track1_platform_governance/00_create_8_tables_ddl_with_descriptions.sql \
+  | bq query --project_id="${PROJECT_ID}" --location="${LOCATION}" --use_legacy_sql=false
+
+sed "s/trustedtesterarvind/${PROJECT_ID}/g" track1_platform_governance/01_load_data_from_gcs.sql \
+  | bq query --project_id="${PROJECT_ID}" --location="${LOCATION}" --use_legacy_sql=false
 ```
 
 ### Step 2 — Run Track 3 & Track 2 (AEON360 Gold Marts + BigQuery ML Models)
