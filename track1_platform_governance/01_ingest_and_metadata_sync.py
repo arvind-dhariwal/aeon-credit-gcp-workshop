@@ -1,71 +1,172 @@
 #!/usr/bin/env python3
-"""Track 1: Automated Ingestion & Metadata Enrichment from Mock Metadata.xlsx.
+"""Track 1: Pure BigQuery REST API v2 Ingestion & Metadata Sync (`Mock Metadata.xlsx`).
 
-Loads ACSM Mock Datasets (T1–T8 CSVs) into BigQuery `acsm_bronze`, then parses
-all 8 worksheets of `Mock Metadata.xlsx` (~220 columns) to automatically populate
-table descriptions and column-level descriptions in BigQuery / Dataplex Catalog.
-
-Fulfils ACSM RFP Clauses:
-- C1.1.1.2 (Diverse ingestion)
-- C1.1.1.8 (Enterprise Unified Governance)
-- C1.1.1.10 (Metadata Management & Business Glossary enrichment)
-- C1.1.2.7 (Data Trust — business definitions visible on every table/column)
-- C1.1.6.8 (Automated Metadata Migration)
+Creates the 8 ACSM tables (`T1_Fact_EP_Judge` .. `T8_dimProduct`) in GCP project
+`trustedtesterarvind` using pure BigQuery REST API v2 Resumable Upload (`urllib.request`)
+with the active `gcloud auth application-default print-access-token` token (never
+invoking legacy `bq` CLI credentials), then populates 100% of table descriptions
+and column descriptions (~223 columns) from `./data/Mock Metadata.xlsx`.
 """
 
 import argparse
-import io
+import gzip
+import json
 import os
 import pathlib
+import shutil
+import subprocess
+import time
+import urllib.error
+import urllib.request
 import xml.etree.ElementTree as ET
 import zipfile
-from typing import Dict, List, Tuple
-from google.cloud import bigquery
+from typing import Any, Dict, List, Optional, Tuple
 
-TABLE_FILE_MAP: Dict[str, Tuple[str, str]] = {
-    "t1_fact_ep_judge": (
-        "T1_Fact_EP_Judge.csv",
-        "T1 - Fact_EP_Judge",
-    ),
-    "t2_fact_ep_sales": (
-        "T2_Fact_EP_Sales.csv",
-        "T2 - Fact_EP_Sales",
-    ),
-    "t3_fact_ep_collection": (
-        "T3_Fact_EP_Collection.csv",
-        "T3 - Fact_EP_Collection",
-    ),
-    "t4_fact_cc_judge": (
-        "T4_Fact_CC_Judge.csv",
-        "T4 - Fact_CC_Judge",
-    ),
-    "t4_fact_cc_judge_v2": (
-        "T4_Fact_CC_Judge_v2.csv",
-        "T4 - Fact_CC_Judge",
-    ),
-    "t5_fact_cc_sales": (
-        "T5_Fact_CC_Sales.csv",
-        "T5 - Fact_CC_Sales",
-    ),
-    "t6_fact_cc_collection": (
-        "T6_Fact_CC_Collection.csv",
-        "T6 - Fact_CC_Collection",
-    ),
-    "t7_m3cif": (
-        "T7_m3CIF.csv",
-        "T7 - m3CIF",
-    ),
-    "t8_dim_product": (
-        "T8_dimProduct.csv",
-        "T8 - dimProduct",
-    ),
-}
+TABLES_SPEC: List[Tuple[str, str, str, str]] = [
+    ("T1_Fact_EP_Judge", "Fact_EP_Judge", "T1_Fact_EP_Judge.csv.gz", "T1 - Fact_EP_Judge"),
+    ("T2_Fact_EP_Sales", "Fact_EP_Sales", "T2_Fact_EP_Sales.csv.gz", "T2 - Fact_EP_Sales"),
+    ("T3_Fact_EP_Collection", "Fact_EP_Collection", "T3_Fact_EP_Collection.csv.gz", "T3 - Fact_EP_Collection"),
+    ("T4_Fact_CC_Judge", "Fact_CC_Judge", "T4_Fact_CC_Judge_v2.csv.gz", "T4 - Fact_CC_Judge"),
+    ("T5_Fact_CC_Sales", "Fact_CC_Sales", "T5_Fact_CC_Sales.csv.gz", "T5 - Fact_CC_Sales"),
+    ("T6_Fact_CC_Collection", "Fact_CC_Collection", "T6_Fact_CC_Collection.csv.gz", "T6 - Fact_CC_Collection"),
+    ("T7_m3CIF", "m3CIF", "T7_m3CIF.csv.gz", "T7 - m3CIF"),
+    ("T8_dimProduct", "dimProduct", "T8_dimProduct.csv.gz", "T8 - dimProduct"),
+]
+
+
+def find_cli(name: str) -> str:
+  found = shutil.which(name)
+  if found:
+    return found
+  fallback = pathlib.Path.home() / "google-cloud-sdk" / "bin" / name
+  if fallback.exists():
+    return str(fallback)
+  return name
+
+
+def get_oauth_token() -> str:
+  gcloud_bin = find_cli("gcloud")
+  for cmd in [
+      [gcloud_bin, "auth", "application-default", "print-access-token"],
+      [gcloud_bin, "auth", "print-access-token"],
+  ]:
+    proc = subprocess.run(cmd, capture_output=True, text=True)
+    if proc.returncode == 0 and proc.stdout.strip():
+      return proc.stdout.strip()
+  raise RuntimeError(
+      "Unable to obtain Google Cloud access token. Run `gcloud auth application-default login`."
+  )
+
+
+def bq_rest_api(
+    method: str,
+    url: str,
+    token: str,
+    project_id: str,
+    body: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+  data = json.dumps(body).encode("utf-8") if body is not None else None
+  req = urllib.request.Request(
+      url,
+      data=data,
+      method=method,
+      headers={
+          "Authorization": f"Bearer {token}",
+          "Content-Type": "application/json",
+          "x-goog-user-project": project_id,
+      },
+  )
+  try:
+    with urllib.request.urlopen(req) as resp:
+      return json.loads(resp.read().decode("utf-8"))
+  except urllib.error.HTTPError as e:
+    err_txt = e.read().decode("utf-8", errors="ignore")
+    if e.code == 409:
+      return {"status": "ALREADY_EXISTS"}
+    raise RuntimeError(f"HTTP {e.code} on {method} {url}: {err_txt}") from e
+
+
+def bq_upload_csv_gz(
+    project_id: str,
+    dataset_id: str,
+    table_id: str,
+    gz_path: pathlib.Path,
+    token: str,
+) -> None:
+  """Uploads a .csv.gz file via BigQuery v2 REST API Resumable Upload and waits for completion."""
+  init_url = (
+      f"https://bigquery.googleapis.com/upload/bigquery/v2/projects/{project_id}"
+      "/jobs?uploadType=resumable"
+  )
+  job_meta = {
+      "configuration": {
+          "load": {
+              "destinationTable": {
+                  "projectId": project_id,
+                  "datasetId": dataset_id,
+                  "tableId": table_id,
+              },
+              "sourceFormat": "CSV",
+              "skipLeadingRows": 1,
+              "autodetect": True,
+              "writeDisposition": "WRITE_TRUNCATE",
+              "allowQuotedNewlines": True,
+          }
+      }
+  }
+  init_req = urllib.request.Request(
+      init_url,
+      data=json.dumps(job_meta).encode("utf-8"),
+      method="POST",
+      headers={
+          "Authorization": f"Bearer {token}",
+          "Content-Type": "application/json; charset=UTF-8",
+          "x-goog-user-project": project_id,
+          "X-Upload-Content-Type": "application/octet-stream",
+      },
+  )
+  with urllib.request.urlopen(init_req) as init_resp:
+    upload_url = init_resp.headers.get("Location")
+
+  if not upload_url:
+    raise RuntimeError("Did not receive resumable upload Location header from BigQuery.")
+
+  # Decompress CSV in-memory so BigQuery CSV parser processes raw bytes cleanly
+  with gzip.open(gz_path, "rb") as f_in:
+    raw_csv_bytes = f_in.read()
+
+  put_req = urllib.request.Request(
+      upload_url,
+      data=raw_csv_bytes,
+      method="PUT",
+      headers={
+          "Content-Type": "application/octet-stream",
+          "Content-Length": str(len(raw_csv_bytes)),
+      },
+  )
+  with urllib.request.urlopen(put_req) as put_resp:
+    job_info = json.loads(put_resp.read().decode("utf-8"))
+
+  job_id = job_info["jobReference"]["jobId"]
+  loc = job_info["jobReference"].get("location", "US")
+  status_url = (
+      f"https://bigquery.googleapis.com/bigquery/v2/projects/{project_id}"
+      f"/jobs/{job_id}?location={loc}"
+  )
+  while True:
+    j = bq_rest_api("GET", status_url, token, project_id)
+    state = j.get("status", {}).get("state")
+    if state == "DONE":
+      err = j.get("status", {}).get("errorResult")
+      if err:
+        raise RuntimeError(f"BigQuery load job failed for {table_id}: {err}")
+      break
+    time.sleep(1.5)
 
 
 def parse_mock_metadata_xlsx(
     xlsx_path: pathlib.Path,
 ) -> Dict[str, Tuple[str, Dict[str, str]]]:
-  """Parses Mock Metadata.xlsx into {sheet_name: (table_desc, {col_name_lower: col_desc})}."""
   metadata: Dict[str, Tuple[str, Dict[str, str]]] = {}
   ns = {
       "main": "http://schemas.openxmlformats.org/spreadsheetml/2006/main",
@@ -88,8 +189,7 @@ def parse_mock_metadata_xlsx(
       rid = sheet.attrib[
           "{http://schemas.openxmlformats.org/officeDocument/2006/relationships}id"
       ]
-      target = "xl/" + rel_map[rid].lstrip("/")
-      sxml = ET.fromstring(z.read(target))
+      sxml = ET.fromstring(z.read("xl/" + rel_map[rid].lstrip("/")))
       table_desc = ""
       col_map: Dict[str, str] = {}
 
@@ -115,7 +215,9 @@ def parse_mock_metadata_xlsx(
           col_desc = non_empty[2].strip()
           col_type = non_empty[3].strip() if len(non_empty) >= 4 else ""
           col_map[col_name.lower()] = (
-              f"{col_desc} [Source Type: {col_type}]" if col_type else col_desc
+              f"{col_desc} [Source Data Type: {col_type}]"
+              if col_type
+              else col_desc
           )
 
       metadata[sheet_name] = (table_desc, col_map)
@@ -123,81 +225,105 @@ def parse_mock_metadata_xlsx(
 
 
 def main() -> None:
+  repo_root = pathlib.Path(__file__).resolve().parent.parent
   parser = argparse.ArgumentParser(
-      description="Load ACSM T1-T8 CSVs and apply Mock Metadata.xlsx glossary."
+      description="Create 8 ACSM tables with full table & column descriptions in BigQuery."
   )
   parser.add_argument(
       "--project_id",
-      default=os.environ.get("GOOGLE_CLOUD_PROJECT", ""),
-      required=False,
+      default=os.environ.get("GOOGLE_CLOUD_PROJECT", "trustedtesterarvind"),
+  )
+  parser.add_argument(
+      "--dataset_id",
+      default="acsm_bronze",
   )
   parser.add_argument(
       "--location",
       default=os.environ.get("GOOGLE_CLOUD_LOCATION", "asia-southeast1"),
   )
-  parser.add_argument("--data_dir", required=True)
+  parser.add_argument("--data_dir", default=str(repo_root / "data"))
   args = parser.parse_args()
 
+  token = get_oauth_token()
   data_dir = pathlib.Path(args.data_dir)
-  xlsx_path = data_dir / "Mock Metadata.xlsx"
-  parsed_meta = (
-      parse_mock_metadata_xlsx(xlsx_path) if xlsx_path.exists() else {}
-  )
+  parsed_meta = parse_mock_metadata_xlsx(data_dir / "Mock Metadata.xlsx")
 
-  client = bigquery.Client(project=args.project_id or None, location=args.location)
-  for ds_name, ds_desc in [
-      ("acsm_bronze", "ACSM Bronze Layer — Raw landing tables from LMS, DMS, AS400, and m3CIF"),
-      ("acsm_silver", "ACSM Silver Layer — Standardized, typed, deduplicated & reconciled models"),
-      ("acsm_gold", "ACSM Gold Layer — AEON360 Customer 360, Underwriting, Collections, ML & Vector RAG"),
+  for ds_id, desc in [
+      (
+          args.dataset_id,
+          "AEON Credit Service Malaysia (ACSM) — 8 Core Tables (T1–T8) with Governed Metadata from Mock Metadata.xlsx",
+      ),
+      (
+          "acsm_silver",
+          "ACSM Silver Layer — Standardized, typed, deduplicated & reconciled models",
+      ),
+      (
+          "acsm_gold",
+          "ACSM Gold Layer — AEON360 Customer 360, Underwriting, Collections, ML & Vector RAG",
+      ),
   ]:
-    ds_id = f"{client.project}.{ds_name}"
-    ds = bigquery.Dataset(ds_id)
-    ds.location = args.location
-    ds.description = ds_desc
-    client.create_dataset(ds, exists_ok=True)
-    print(f"[OK] Verified dataset {ds_id} ({args.location})")
-
-  for table_name, (csv_file, sheet_key) in TABLE_FILE_MAP.items():
-    csv_path = data_dir / csv_file
-    if not csv_path.exists():
-      print(f"[SKIP] {csv_path} not found locally.")
-      continue
-
-    table_id = f"{client.project}.acsm_bronze.{table_name}"
-    job_config = bigquery.LoadJobConfig(
-        source_format=bigquery.SourceFormat.CSV,
-        skip_leading_rows=1,
-        autodetect=True,
-        write_disposition=bigquery.WriteDisposition.WRITE_TRUNCATE,
+    bq_rest_api(
+        "POST",
+        f"https://bigquery.googleapis.com/bigquery/v2/projects/{args.project_id}/datasets",
+        token,
+        args.project_id,
+        {
+            "datasetReference": {
+                "projectId": args.project_id,
+                "datasetId": ds_id,
+            },
+            "location": args.location,
+            "description": desc,
+        },
     )
-    with open(csv_path, "rb") as f:
-      job = client.load_table_from_file(f, table_id, job_config=job_config)
-    job.result()
+    print(f"[DATASET READY] {args.project_id}.{ds_id}", flush=True)
 
-    table = client.get_table(table_id)
-    if sheet_key in parsed_meta:
-      table_desc, col_map = parsed_meta[sheet_key]
-      table.description = (
-          f"{table_desc} (Governed via Mock Metadata.xlsx | Source: {csv_file})"
-      )
-      new_schema = []
-      for field in table.schema:
-        desc = col_map.get(field.name.lower(), field.description)
-        new_schema.append(
-            bigquery.SchemaField(
-                name=field.name,
-                field_type=field.field_type,
-                mode=field.mode,
-                description=desc,
-                fields=field.fields,
-            )
-        )
-      table.schema = new_schema
-      client.update_table(table, ["description", "schema"])
-    print(
-        f"[LOADED & ENRICHED] {table_id}: {table.num_rows:,} rows, "
-        f"{len(table.schema)} governed columns"
+  import concurrent.futures
+
+  def process_one_table(spec: Tuple[str, str, str, str]) -> str:
+    t_name, short_name, gz_file, sheet_key = spec
+    gz_path = data_dir / "full_compressed" / gz_file
+    print(f"Uploading {args.project_id}.{args.dataset_id}.{t_name} from {gz_file} ...", flush=True)
+    bq_upload_csv_gz(args.project_id, args.dataset_id, t_name, gz_path, token)
+
+    t_url = (
+        f"https://bigquery.googleapis.com/bigquery/v2/projects/{args.project_id}"
+        f"/datasets/{args.dataset_id}/tables/{t_name}"
     )
+    tbl = bq_rest_api("GET", t_url, token, args.project_id)
+    tdesc, cmap = parsed_meta[sheet_key]
+    fields = tbl.get("schema", {}).get("fields", [])
+    matched = 0
+    for f in fields:
+      col_desc = cmap.get(f["name"].lower())
+      if col_desc:
+        f["description"] = col_desc
+        matched += 1
+    bq_rest_api(
+        "PATCH",
+        t_url,
+        token,
+        args.project_id,
+        {
+            "description": (
+                f"{tdesc} (Governed via Mock Metadata.xlsx | Sheet: {sheet_key})"
+            ),
+            "schema": {"fields": fields},
+        },
+    )
+    num_rows = int(tbl.get("numRows", "0"))
+    msg = (
+        f"[CREATED & ENRICHED] {args.project_id}.{args.dataset_id}.{t_name} -> "
+        f"{num_rows:,} rows | {matched}/{len(fields)} columns described"
+    )
+    print(msg, flush=True)
+    return msg
+
+  with concurrent.futures.ThreadPoolExecutor(max_workers=4) as pool:
+    results = list(pool.map(process_one_table, TABLES_SPEC))
+  print("\n=== SUMMARY OF 8 ACSM TABLES IN BIGQUERY ===", flush=True)
+  for r in results:
+    print(r, flush=True)
 
 
 if __name__ == "__main__":
