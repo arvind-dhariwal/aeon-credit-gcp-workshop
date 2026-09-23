@@ -9,7 +9,7 @@
 LOAD DATA OVERWRITE `trustedtesterarvind.acsm_bronze.Fact_EP_Judge`
 FROM FILES (
   format = 'CSV',
-  uris = ['gs://acsm-workshop-landing-trustedtesterarvind/full_compressed/T1_Fact_EP_Judge.csv.gz'],
+  uris = ['gs://acsm-workshop-landing-trustedtesterarvind/full_compressed/Fact_EP_Judge.csv.gz'],
   skip_leading_rows = 1,
   allow_quoted_newlines = TRUE
 );
@@ -18,7 +18,7 @@ FROM FILES (
 LOAD DATA OVERWRITE `trustedtesterarvind.acsm_bronze.Fact_EP_Sales`
 FROM FILES (
   format = 'CSV',
-  uris = ['gs://acsm-workshop-landing-trustedtesterarvind/full_compressed/T2_Fact_EP_Sales.csv.gz'],
+  uris = ['gs://acsm-workshop-landing-trustedtesterarvind/full_compressed/Fact_EP_Sales.csv.gz'],
   skip_leading_rows = 1,
   allow_quoted_newlines = TRUE
 );
@@ -27,7 +27,7 @@ FROM FILES (
 LOAD DATA OVERWRITE `trustedtesterarvind.acsm_bronze.Fact_EP_Collection`
 FROM FILES (
   format = 'CSV',
-  uris = ['gs://acsm-workshop-landing-trustedtesterarvind/full_compressed/T3_Fact_EP_Collection.csv.gz'],
+  uris = ['gs://acsm-workshop-landing-trustedtesterarvind/full_compressed/Fact_EP_Collection.csv.gz'],
   skip_leading_rows = 1,
   allow_quoted_newlines = TRUE
 );
@@ -36,7 +36,7 @@ FROM FILES (
 LOAD DATA OVERWRITE `trustedtesterarvind.acsm_bronze.Fact_CC_Judge`
 FROM FILES (
   format = 'CSV',
-  uris = ['gs://acsm-workshop-landing-trustedtesterarvind/full_compressed/T4_Fact_CC_Judge_v2.csv.gz'],
+  uris = ['gs://acsm-workshop-landing-trustedtesterarvind/full_compressed/Fact_CC_Judge.csv.gz'],
   skip_leading_rows = 1,
   allow_quoted_newlines = TRUE
 );
@@ -45,7 +45,7 @@ FROM FILES (
 LOAD DATA OVERWRITE `trustedtesterarvind.acsm_bronze.Fact_CC_Sales`
 FROM FILES (
   format = 'CSV',
-  uris = ['gs://acsm-workshop-landing-trustedtesterarvind/full_compressed/T5_Fact_CC_Sales.csv.gz'],
+  uris = ['gs://acsm-workshop-landing-trustedtesterarvind/full_compressed/Fact_CC_Sales.csv.gz'],
   skip_leading_rows = 1,
   allow_quoted_newlines = TRUE
 );
@@ -54,7 +54,7 @@ FROM FILES (
 LOAD DATA OVERWRITE `trustedtesterarvind.acsm_bronze.Fact_CC_Collection`
 FROM FILES (
   format = 'CSV',
-  uris = ['gs://acsm-workshop-landing-trustedtesterarvind/full_compressed/T6_Fact_CC_Collection.csv.gz'],
+  uris = ['gs://acsm-workshop-landing-trustedtesterarvind/full_compressed/Fact_CC_Collection.csv.gz'],
   skip_leading_rows = 1,
   allow_quoted_newlines = TRUE
 );
@@ -63,7 +63,7 @@ FROM FILES (
 LOAD DATA OVERWRITE `trustedtesterarvind.acsm_bronze.m3CIF`
 FROM FILES (
   format = 'CSV',
-  uris = ['gs://acsm-workshop-landing-trustedtesterarvind/full_compressed/T7_m3CIF.csv.gz'],
+  uris = ['gs://acsm-workshop-landing-trustedtesterarvind/full_compressed/m3CIF.csv.gz'],
   skip_leading_rows = 1,
   allow_quoted_newlines = TRUE
 );
@@ -72,7 +72,7 @@ FROM FILES (
 LOAD DATA OVERWRITE `trustedtesterarvind.acsm_bronze.dimProduct`
 FROM FILES (
   format = 'CSV',
-  uris = ['gs://acsm-workshop-landing-trustedtesterarvind/full_compressed/T8_dimProduct.csv.gz'],
+  uris = ['gs://acsm-workshop-landing-trustedtesterarvind/full_compressed/dimProduct.csv.gz'],
   skip_leading_rows = 1,
   allow_quoted_newlines = TRUE
 );
