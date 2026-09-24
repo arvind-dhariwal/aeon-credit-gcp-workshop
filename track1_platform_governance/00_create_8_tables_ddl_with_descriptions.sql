@@ -1,17 +1,17 @@
 -- =============================================================================
 -- DEMO FLOW 2 (STEP 1 OF 2): Create 8 ACSM Tables with Table & Column Descriptions
--- Project: `<PROJECT_ID>` (e.g. `trustedtesterarvind`) | Dataset: `acsm_bronze`
+-- Project: `<PROJECT_ID>` (e.g. `${PROJECT_ID}`) | Dataset: `acsm_bronze`
 -- Location: `asia-southeast1` (Singapore)
 -- Source Dictionary: `Mock Metadata.xlsx` (8 tables, 226 described columns)
 -- =============================================================================
 
-CREATE SCHEMA IF NOT EXISTS `trustedtesterarvind.acsm_bronze`
+CREATE SCHEMA IF NOT EXISTS `acsm_bronze`
 OPTIONS (
   location = "asia-southeast1",
   description = "AEON Credit Service Malaysia (ACSM) — 8 Core Tables (T1-T8) with Governed Metadata (Singapore Region)"
 );
 
-CREATE OR REPLACE TABLE `trustedtesterarvind.acsm_bronze.Fact_EP_Judge` (
+CREATE OR REPLACE TABLE `acsm_bronze.Fact_EP_Judge` (
   `Rcd_DT` DATE OPTIONS(description = "Data extraction date [Source Data Type: date]"),
   `CIF_NO` INT64 OPTIONS(description = "Unique customer ID [Source Data Type: numeric]"),
   `APPL_NO` INT64 OPTIONS(description = "PRODUCT application number [Source Data Type: varchar]"),
@@ -74,7 +74,7 @@ CREATE OR REPLACE TABLE `trustedtesterarvind.acsm_bronze.Fact_EP_Judge` (
   `PreAssessment_Flag` BOOL OPTIONS(description = "Some customers qualify for pre-assessment [Source Data Type: varchar]")
 ) OPTIONS(description = "The current (daily full refreshed) application status (Approved or Rejected) for EP products. (Governed via Mock Metadata.xlsx | Sheet: T1 - Fact_EP_Judge)");
 
-CREATE OR REPLACE TABLE `trustedtesterarvind.acsm_bronze.Fact_EP_Sales` (
+CREATE OR REPLACE TABLE `acsm_bronze.Fact_EP_Sales` (
   `TX_DT` FLOAT64 OPTIONS(description = "Sales Date"),
   `CIF_No` STRING OPTIONS(description = "Unique customer ID"),
   `TransactionCountry` STRING OPTIONS(description = "Ringgit Malaysia"),
@@ -86,7 +86,7 @@ CREATE OR REPLACE TABLE `trustedtesterarvind.acsm_bronze.Fact_EP_Sales` (
   `TransCount` FLOAT64 OPTIONS(description = "Transaction Count")
 ) OPTIONS(description = "The confirmed sales log of the EP product. (Governed via Mock Metadata.xlsx | Sheet: T2 - Fact_EP_Sales)");
 
-CREATE OR REPLACE TABLE `trustedtesterarvind.acsm_bronze.Fact_EP_Collection` (
+CREATE OR REPLACE TABLE `acsm_bronze.Fact_EP_Collection` (
   `TX_DT` INT64 OPTIONS(description = "Reporting date [Source Data Type: decimal]"),
   `First_INST_DT` INT64 OPTIONS(description = "First intallment date [Source Data Type: decimal]"),
   `Agree_No` INT64 OPTIONS(description = "Loan agreement ID [Source Data Type: varchar]"),
@@ -110,7 +110,7 @@ CREATE OR REPLACE TABLE `trustedtesterarvind.acsm_bronze.Fact_EP_Collection` (
   `Unpaid_Count` INT64 OPTIONS(description = "Principal Unpaid count [Source Data Type: decimal]")
 ) OPTIONS(description = "The collection status snapshot for EP products as at closing period (Governed via Mock Metadata.xlsx | Sheet: T3 - Fact_EP_Collection)");
 
-CREATE OR REPLACE TABLE `trustedtesterarvind.acsm_bronze.Fact_CC_Judge` (
+CREATE OR REPLACE TABLE `acsm_bronze.Fact_CC_Judge` (
   `Rcd_DT` DATE OPTIONS(description = "Data extraction date [Source Data Type: date]"),
   `Account_No` INT64 OPTIONS(description = "Card account number [Source Data Type: varchar]"),
   `Appl_ID` INT64 OPTIONS(description = "Credit card application ID [Source Data Type: varchar]"),
@@ -167,7 +167,7 @@ CREATE OR REPLACE TABLE `trustedtesterarvind.acsm_bronze.Fact_CC_Judge` (
   `ProposedCardBiz_ID` STRING OPTIONS(description = "Proposed card ID [Source Data Type: varchar]")
 ) OPTIONS(description = "The current (daily full refreshed) application status (Approved or Rejected) for credit cards. (Governed via Mock Metadata.xlsx | Sheet: T4 - Fact_CC_Judge)");
 
-CREATE OR REPLACE TABLE `trustedtesterarvind.acsm_bronze.Fact_CC_Sales` (
+CREATE OR REPLACE TABLE `acsm_bronze.Fact_CC_Sales` (
   `TX_DT` INT64 OPTIONS(description = "Sales Date [Source Data Type: decimal]"),
   `CIF_No` INT64 OPTIONS(description = "Unique customer ID [Source Data Type: varchar]"),
   `TransactionCountry` STRING OPTIONS(description = "Ringgit Malaysia [Source Data Type: varchar]"),
@@ -179,7 +179,7 @@ CREATE OR REPLACE TABLE `trustedtesterarvind.acsm_bronze.Fact_CC_Sales` (
   `TransCount` INT64 OPTIONS(description = "Transaction Count [Source Data Type: decimal]")
 ) OPTIONS(description = "The actual spending & cash advance log on credit card (Governed via Mock Metadata.xlsx | Sheet: T5 - Fact_CC_Sales)");
 
-CREATE OR REPLACE TABLE `trustedtesterarvind.acsm_bronze.Fact_CC_Collection` (
+CREATE OR REPLACE TABLE `acsm_bronze.Fact_CC_Collection` (
   `TX_DT` INT64 OPTIONS(description = "Reporting date [Source Data Type: decimal]"),
   `Account_No` INT64 OPTIONS(description = "CC account ID [Source Data Type: varchar]"),
   `CIF_No` INT64 OPTIONS(description = "Unique customer ID [Source Data Type: varchar]"),
@@ -199,7 +199,7 @@ CREATE OR REPLACE TABLE `trustedtesterarvind.acsm_bronze.Fact_CC_Collection` (
   `Maintain_Count` INT64 OPTIONS(description = "Maintain count [Source Data Type: decimal]")
 ) OPTIONS(description = "The billing and collection status snapshot for credit cards as at closing period (Governed via Mock Metadata.xlsx | Sheet: T6 - Fact_CC_Collection)");
 
-CREATE OR REPLACE TABLE `trustedtesterarvind.acsm_bronze.m3CIF` (
+CREATE OR REPLACE TABLE `acsm_bronze.m3CIF` (
   `Rcd_DT` DATE OPTIONS(description = "Record refresh date [Source Data Type: date]"),
   `CIF_ID` INT64 OPTIONS(description = "Customer ID [Source Data Type: varchar]"),
   `CIF_NM` STRING OPTIONS(description = "Customer name [Source Data Type: varchar]"),
@@ -236,7 +236,7 @@ CREATE OR REPLACE TABLE `trustedtesterarvind.acsm_bronze.m3CIF` (
   `EmpSts` INT64 OPTIONS(description = "Employment Status [Source Data Type: int]")
 ) OPTIONS(description = "Customer latest status daily refresh table (Governed via Mock Metadata.xlsx | Sheet: T7 - m3CIF)");
 
-CREATE OR REPLACE TABLE `trustedtesterarvind.acsm_bronze.dimProduct` (
+CREATE OR REPLACE TABLE `acsm_bronze.dimProduct` (
   `Expiry_DT` INT64 OPTIONS(description = "Card expiry date [Source Data Type: varchar]"),
   `FirstSpend_DT` INT64 OPTIONS(description = "First spend date [Source Data Type: varchar]"),
   `Block_Code` STRING OPTIONS(description = "If card is blocked [Source Data Type: varchar]"),
