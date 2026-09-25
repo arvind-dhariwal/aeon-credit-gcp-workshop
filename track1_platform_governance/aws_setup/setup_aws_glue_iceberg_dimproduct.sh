@@ -113,10 +113,14 @@ EOF
 )
 
 if aws iam get-role --role-name "${AWS_ROLE_NAME}" >/dev/null 2>&1; then
-  aws iam update-assume-role-policy \
-    --role-name "${AWS_ROLE_NAME}" \
-    --policy-document "${TRUST_POLICY_JSON}"
-  echo "  ✅ Updated Web Identity Trust Policy on role: ${AWS_ROLE_NAME}"
+  if [[ "${BIGLAKE_SA_IDS}" != "blirc-placeholder@gcp-sa-biglakerestcatalog.iam.gserviceaccount.com" ]]; then
+    aws iam update-assume-role-policy \
+      --role-name "${AWS_ROLE_NAME}" \
+      --policy-document "${TRUST_POLICY_JSON}"
+    echo "  ✅ Updated Web Identity Trust Policy on role: ${AWS_ROLE_NAME}"
+  else
+    echo "  ℹ️ Role ${AWS_ROLE_NAME} already exists; preserving existing trusted BigLake SA IDs."
+  fi
 else
   aws iam create-role \
     --role-name "${AWS_ROLE_NAME}" \
@@ -157,6 +161,8 @@ SCOPED_POLICY_JSON=$(cat <<EOF
             "Resource": [
                 "arn:aws:glue:${AWS_REGION}:${AWS_ACCOUNT_ID}:catalog",
                 "arn:aws:glue:${AWS_REGION}:${AWS_ACCOUNT_ID}:database/${AWS_GLUE_DB}",
+                "arn:aws:glue:${AWS_REGION}:${AWS_ACCOUNT_ID}:table/${AWS_GLUE_DB}/*",
+                "arn:aws:glue:${AWS_REGION}:${AWS_ACCOUNT_ID}:table/${AWS_GLUE_DB}/dimproduct",
                 "arn:aws:glue:${AWS_REGION}:${AWS_ACCOUNT_ID}:table/${AWS_GLUE_DB}/${AWS_ICEBERG_TABLE}"
             ]
         },
@@ -179,7 +185,7 @@ SCOPED_POLICY_JSON=$(cat <<EOF
             ],
             "Resource": [
                 "arn:aws:s3:::${AWS_S3_BUCKET}",
-                "arn:aws:s3:::${AWS_S3_BUCKET}/acsm_iceberg_warehouse/${AWS_GLUE_DB}/${AWS_ICEBERG_TABLE}/*"
+                "arn:aws:s3:::${AWS_S3_BUCKET}/*"
             ]
         },
         {
@@ -187,7 +193,6 @@ SCOPED_POLICY_JSON=$(cat <<EOF
             "Effect": "Deny",
             "Action": [
                 "glue:GetDatabase",
-                "glue:GetDatabases",
                 "glue:GetTable",
                 "glue:GetTables",
                 "glue:GetPartition",
@@ -196,6 +201,8 @@ SCOPED_POLICY_JSON=$(cat <<EOF
             "NotResource": [
                 "arn:aws:glue:${AWS_REGION}:${AWS_ACCOUNT_ID}:catalog",
                 "arn:aws:glue:${AWS_REGION}:${AWS_ACCOUNT_ID}:database/${AWS_GLUE_DB}",
+                "arn:aws:glue:${AWS_REGION}:${AWS_ACCOUNT_ID}:table/${AWS_GLUE_DB}/*",
+                "arn:aws:glue:${AWS_REGION}:${AWS_ACCOUNT_ID}:table/${AWS_GLUE_DB}/dimproduct",
                 "arn:aws:glue:${AWS_REGION}:${AWS_ACCOUNT_ID}:table/${AWS_GLUE_DB}/${AWS_ICEBERG_TABLE}"
             ]
         },
