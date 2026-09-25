@@ -72,25 +72,3 @@ FROM FILES (
   allow_quoted_newlines = TRUE
 );
 """, bucket_uri);
-
--- 7. Load m3CIF (100,000 rows)
-EXECUTE IMMEDIATE FORMAT("""
-LOAD DATA OVERWRITE `acsm_bronze.m3CIF`
-FROM FILES (
-  format = 'CSV',
-  uris = ['%s/m3CIF.csv.gz'],
-  skip_leading_rows = 1,
-  allow_quoted_newlines = TRUE
-);
-""", bucket_uri);
-
--- 8. Load dimProduct (65,000 rows)
-EXECUTE IMMEDIATE FORMAT("""
-LOAD DATA OVERWRITE `acsm_bronze.dimProduct`
-FROM FILES (
-  format = 'CSV',
-  uris = ['%s/dimProduct.csv.gz'],
-  skip_leading_rows = 1,
-  allow_quoted_newlines = TRUE
-);
-""", bucket_uri);
