@@ -250,10 +250,10 @@ echo "  ✅ Attached ONLY '${AWS_MANAGED_POLICY_NAME}' to role '${AWS_ROLE_NAME}
 # ------------------------------------------------------------------------------
 echo ""
 echo "[Step 4/5] Uploading dimProduct.csv.gz (65,000 rows) to ${STAGING_S3_URI}..."
-CSV_GZ_PATH="${REPO_ROOT}/data_generator/output/dimProduct.csv.gz"
+CSV_GZ_PATH="${REPO_ROOT}/data/full_compressed/dimProduct.csv.gz"
 if [[ ! -f "${CSV_GZ_PATH}" ]]; then
-  echo "  Generating dimProduct.csv.gz via synthetic generator..."
-  python3 "${REPO_ROOT}/data_generator/generate_synthetic_acsm_data.py" --output-dir "${REPO_ROOT}/data_generator/output"
+  echo "  ❌ ERROR: Could not find ${CSV_GZ_PATH}"
+  exit 1
 fi
 aws s3 cp "${CSV_GZ_PATH}" "${STAGING_S3_URI}dimProduct.csv.gz" --region "${AWS_REGION}"
 
@@ -325,29 +325,46 @@ run_athena_query \
 aws s3 rm "${ICEBERG_LOCATION_S3_URI}" --recursive --region "${AWS_REGION}" >/dev/null 2>&1 || true
 
 run_athena_query \
-  "CREATE TABLE ${AWS_GLUE_DB}.${AWS_ICEBERG_TABLE}
-  WITH (
-    table_type = 'ICEBERG',
-    format = 'PARQUET',
-    location = '${ICEBERG_LOCATION_S3_URI}',
-    is_external = false
-  ) AS
+  "CREATE TABLE ${AWS_GLUE_DB}.${AWS_ICEBERG_TABLE} (
+    Account_No string,
+    CIF_ID string,
+    Card_Open_DT string,
+    Brand_Card_Type string,
+    Card_Sub_Category string,
+    Card_Prd_Type string,
+    Card_Status string,
+    Card_Collection_Status string,
+    CP_CL double,
+    CP_CL_Usage double,
+    CP_CL_Available double,
+    CC_CA_Usage double,
+    CC_CA_Available double
+  )
+  LOCATION '${ICEBERG_LOCATION_S3_URI}'
+  TBLPROPERTIES (
+    'table_type' = 'ICEBERG',
+    'format' = 'parquet'
+  );" \
+  "Create AWS Glue Apache Iceberg Table Schema (${AWS_GLUE_DB}.${AWS_ICEBERG_TABLE})"
+
+run_athena_query \
+  "INSERT INTO ${AWS_GLUE_DB}.${AWS_ICEBERG_TABLE}
   SELECT
-    CAST(Account_No AS varchar) AS Account_No,
-    CAST(CIF_ID AS varchar) AS CIF_ID,
-    CAST(Card_Open_DT AS varchar) AS Card_Open_DT,
-    CAST(Brand_Card_Type AS varchar) AS Brand_Card_Type,
-    CAST(Card_Sub_Category AS varchar) AS Card_Sub_Category,
-    CAST(Card_Prd_Type AS varchar) AS Card_Prd_Type,
-    CAST(Card_Status AS varchar) AS Card_Status,
-    CAST(Card_Collection_Status AS varchar) AS Card_Collection_Status,
+    Account_No,
+    CIF_ID,
+    Card_Open_DT,
+    Brand_Card_Type,
+    Card_Sub_Category,
+    Card_Prd_Type,
+    Card_Status,
+    Card_Collection_Status,
     CAST(NULLIF(CP_CL, '') AS double) AS CP_CL,
     CAST(NULLIF(CP_CL_Usage, '') AS double) AS CP_CL_Usage,
     CAST(NULLIF(CP_CL_Available, '') AS double) AS CP_CL_Available,
     CAST(NULLIF(CC_CA_Usage, '') AS double) AS CC_CA_Usage,
     CAST(NULLIF(CC_CA_Available, '') AS double) AS CC_CA_Available
   FROM ${AWS_GLUE_DB}.dimproduct_csv_staging;" \
-  "Create & Populate AWS Glue Apache Iceberg Table (${AWS_GLUE_DB}.${AWS_ICEBERG_TABLE} - 65,000 rows)"
+  "Populate AWS Glue Apache Iceberg Table (${AWS_GLUE_DB}.${AWS_ICEBERG_TABLE} - 65,000 rows)"
 
 run_athena_query \
   "DROP TABLE IF EXISTS ${AWS_GLUE_DB}.dimproduct_csv_staging;" \
