@@ -19,19 +19,28 @@ COMMENT 'AEON Credit Service Malaysia (ACSM) AWS Glue Bronze Lakehouse Namespace
 -- STEP 2: Create Temporary CSV Staging Table over `dimProduct.csv.gz` in S3
 -- -----------------------------------------------------------------------------
 CREATE EXTERNAL TABLE IF NOT EXISTS acsm_aws_bronze.dimproduct_csv_staging (
-  Account_No string,
-  CIF_ID string,
-  Card_Open_DT string,
-  Brand_Card_Type string,
-  Card_Sub_Category string,
-  Card_Prd_Type string,
+  Expiry_DT string,
+  FirstSpend_DT string,
+  Block_Code string,
+  Block_Date string,
+  CIC_Status string,
   Card_Status string,
-  Card_Collection_Status string,
+  AKPK_Status string,
+  Card_First_Emboss_Date string,
+  Card_Emboss_Date string,
+  Card_First_Activated_Date string,
+  Card_Activated_Date string,
   CP_CL string,
-  CP_CL_Usage string,
   CP_CL_Available string,
-  CC_CA_Usage string,
-  CC_CA_Available string
+  CA_CL string,
+  CA_CL_Available string,
+  CP_CL_Usage string,
+  CA_CL_Usage string,
+  CIF_ID string,
+  Account_No string,
+  Account_Agree_Sts string,
+  Virtual_Card_Flag string,
+  Wallet_Tier string
 )
 ROW FORMAT SERDE 'org.apache.hadoop.hive.serde2.OpenCSVSerde'
 WITH SERDEPROPERTIES (
@@ -55,19 +64,28 @@ WITH (
   is_external = false
 ) AS
 SELECT
-  CAST(Account_No AS varchar) AS Account_No,
-  CAST(CIF_ID AS varchar) AS CIF_ID,
-  CAST(Card_Open_DT AS varchar) AS Card_Open_DT,
-  CAST(Brand_Card_Type AS varchar) AS Brand_Card_Type,
-  CAST(Card_Sub_Category AS varchar) AS Card_Sub_Category,
-  CAST(Card_Prd_Type AS varchar) AS Card_Prd_Type,
+  CAST(NULLIF(Expiry_DT, '') AS bigint) AS Expiry_DT,
+  CAST(NULLIF(FirstSpend_DT, '') AS bigint) AS FirstSpend_DT,
+  CAST(Block_Code AS varchar) AS Block_Code,
+  CAST(NULLIF(Block_Date, '') AS bigint) AS Block_Date,
+  CAST(CIC_Status AS varchar) AS CIC_Status,
   CAST(Card_Status AS varchar) AS Card_Status,
-  CAST(Card_Collection_Status AS varchar) AS Card_Collection_Status,
+  CAST(AKPK_Status AS varchar) AS AKPK_Status,
+  CAST(NULLIF(Card_First_Emboss_Date, '') AS bigint) AS Card_First_Emboss_Date,
+  CAST(NULLIF(Card_Emboss_Date, '') AS bigint) AS Card_Emboss_Date,
+  CAST(NULLIF(Card_First_Activated_Date, '') AS bigint) AS Card_First_Activated_Date,
+  CAST(NULLIF(Card_Activated_Date, '') AS bigint) AS Card_Activated_Date,
   CAST(NULLIF(CP_CL, '') AS double) AS CP_CL,
-  CAST(NULLIF(CP_CL_Usage, '') AS double) AS CP_CL_Usage,
   CAST(NULLIF(CP_CL_Available, '') AS double) AS CP_CL_Available,
-  CAST(NULLIF(CC_CA_Usage, '') AS double) AS CC_CA_Usage,
-  CAST(NULLIF(CC_CA_Available, '') AS double) AS CC_CA_Available
+  CAST(NULLIF(CA_CL, '') AS double) AS CA_CL,
+  CAST(NULLIF(CA_CL_Available, '') AS double) AS CA_CL_Available,
+  CAST(NULLIF(CP_CL_Usage, '') AS double) AS CP_CL_Usage,
+  CAST(NULLIF(CA_CL_Usage, '') AS double) AS CA_CL_Usage,
+  CAST(NULLIF(CIF_ID, '') AS bigint) AS CIF_ID,
+  CAST(NULLIF(Account_No, '') AS bigint) AS Account_No,
+  CAST(Account_Agree_Sts AS varchar) AS Account_Agree_Sts,
+  CAST(Virtual_Card_Flag AS varchar) AS Virtual_Card_Flag,
+  CAST(Wallet_Tier AS varchar) AS Wallet_Tier
 FROM acsm_aws_bronze.dimproduct_csv_staging;
 
 -- -----------------------------------------------------------------------------
@@ -81,7 +99,7 @@ DROP TABLE IF EXISTS acsm_aws_bronze.dimproduct_csv_staging;
 -- -----------------------------------------------------------------------------
 SELECT
   Card_Status,
-  Brand_Card_Type,
+  Wallet_Tier,
   COUNT(*) AS total_cards,
   ROUND(AVG(CP_CL), 2) AS avg_limit_myr
 FROM acsm_aws_bronze.dimProduct

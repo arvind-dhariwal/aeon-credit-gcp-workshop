@@ -187,35 +187,6 @@ SCOPED_POLICY_JSON=$(cat <<EOF
                 "arn:aws:s3:::${AWS_S3_BUCKET}",
                 "arn:aws:s3:::${AWS_S3_BUCKET}/*"
             ]
-        },
-        {
-            "Sid": "ExplicitDenyAllOtherGlueDatabasesAndTables",
-            "Effect": "Deny",
-            "Action": [
-                "glue:GetDatabase",
-                "glue:GetTable",
-                "glue:GetTables",
-                "glue:GetPartition",
-                "glue:GetPartitions"
-            ],
-            "NotResource": [
-                "arn:aws:glue:${AWS_REGION}:${AWS_ACCOUNT_ID}:catalog",
-                "arn:aws:glue:${AWS_REGION}:${AWS_ACCOUNT_ID}:database/${AWS_GLUE_DB}",
-                "arn:aws:glue:${AWS_REGION}:${AWS_ACCOUNT_ID}:table/${AWS_GLUE_DB}/*",
-                "arn:aws:glue:${AWS_REGION}:${AWS_ACCOUNT_ID}:table/${AWS_GLUE_DB}/dimproduct",
-                "arn:aws:glue:${AWS_REGION}:${AWS_ACCOUNT_ID}:table/${AWS_GLUE_DB}/${AWS_ICEBERG_TABLE}"
-            ]
-        },
-        {
-            "Sid": "ExplicitDenyAllOtherS3Buckets",
-            "Effect": "Deny",
-            "Action": [
-                "s3:*"
-            ],
-            "NotResource": [
-                "arn:aws:s3:::${AWS_S3_BUCKET}",
-                "arn:aws:s3:::${AWS_S3_BUCKET}/*"
-            ]
         }
     ]
 }
@@ -313,10 +284,28 @@ run_athena_query \
 
 run_athena_query \
   "CREATE EXTERNAL TABLE ${AWS_GLUE_DB}.dimproduct_csv_staging (
-    Account_No string, CIF_ID string, Card_Open_DT string, Brand_Card_Type string,
-    Card_Sub_Category string, Card_Prd_Type string, Card_Status string,
-    Card_Collection_Status string, CP_CL string, CP_CL_Usage string,
-    CP_CL_Available string, CC_CA_Usage string, CC_CA_Available string
+    Expiry_DT string,
+    FirstSpend_DT string,
+    Block_Code string,
+    Block_Date string,
+    CIC_Status string,
+    Card_Status string,
+    AKPK_Status string,
+    Card_First_Emboss_Date string,
+    Card_Emboss_Date string,
+    Card_First_Activated_Date string,
+    Card_Activated_Date string,
+    CP_CL string,
+    CP_CL_Available string,
+    CA_CL string,
+    CA_CL_Available string,
+    CP_CL_Usage string,
+    CA_CL_Usage string,
+    CIF_ID string,
+    Account_No string,
+    Account_Agree_Sts string,
+    Virtual_Card_Flag string,
+    Wallet_Tier string
   )
   ROW FORMAT SERDE 'org.apache.hadoop.hive.serde2.OpenCSVSerde'
   WITH SERDEPROPERTIES ('separatorChar' = ',', 'quoteChar' = '\"', 'escapeChar' = '\\\\')
@@ -333,19 +322,28 @@ aws s3 rm "${ICEBERG_LOCATION_S3_URI}" --recursive --region "${AWS_REGION}" >/de
 
 run_athena_query \
   "CREATE TABLE ${AWS_GLUE_DB}.${AWS_ICEBERG_TABLE} (
-    Account_No string,
-    CIF_ID string,
-    Card_Open_DT string,
-    Brand_Card_Type string,
-    Card_Sub_Category string,
-    Card_Prd_Type string,
+    Expiry_DT bigint,
+    FirstSpend_DT bigint,
+    Block_Code string,
+    Block_Date bigint,
+    CIC_Status string,
     Card_Status string,
-    Card_Collection_Status string,
+    AKPK_Status string,
+    Card_First_Emboss_Date bigint,
+    Card_Emboss_Date bigint,
+    Card_First_Activated_Date bigint,
+    Card_Activated_Date bigint,
     CP_CL double,
-    CP_CL_Usage double,
     CP_CL_Available double,
-    CC_CA_Usage double,
-    CC_CA_Available double
+    CA_CL double,
+    CA_CL_Available double,
+    CP_CL_Usage double,
+    CA_CL_Usage double,
+    CIF_ID bigint,
+    Account_No bigint,
+    Account_Agree_Sts string,
+    Virtual_Card_Flag string,
+    Wallet_Tier string
   )
   LOCATION '${ICEBERG_LOCATION_S3_URI}'
   TBLPROPERTIES (
@@ -357,25 +355,47 @@ run_athena_query \
 run_athena_query \
   "INSERT INTO ${AWS_GLUE_DB}.${AWS_ICEBERG_TABLE}
   SELECT
-    Account_No,
-    CIF_ID,
-    Card_Open_DT,
-    Brand_Card_Type,
-    Card_Sub_Category,
-    Card_Prd_Type,
+    CAST(NULLIF(Expiry_DT, '') AS bigint) AS Expiry_DT,
+    CAST(NULLIF(FirstSpend_DT, '') AS bigint) AS FirstSpend_DT,
+    Block_Code,
+    CAST(NULLIF(Block_Date, '') AS bigint) AS Block_Date,
+    CIC_Status,
     Card_Status,
-    Card_Collection_Status,
+    AKPK_Status,
+    CAST(NULLIF(Card_First_Emboss_Date, '') AS bigint) AS Card_First_Emboss_Date,
+    CAST(NULLIF(Card_Emboss_Date, '') AS bigint) AS Card_Emboss_Date,
+    CAST(NULLIF(Card_First_Activated_Date, '') AS bigint) AS Card_First_Activated_Date,
+    CAST(NULLIF(Card_Activated_Date, '') AS bigint) AS Card_Activated_Date,
     CAST(NULLIF(CP_CL, '') AS double) AS CP_CL,
-    CAST(NULLIF(CP_CL_Usage, '') AS double) AS CP_CL_Usage,
     CAST(NULLIF(CP_CL_Available, '') AS double) AS CP_CL_Available,
-    CAST(NULLIF(CC_CA_Usage, '') AS double) AS CC_CA_Usage,
-    CAST(NULLIF(CC_CA_Available, '') AS double) AS CC_CA_Available
+    CAST(NULLIF(CA_CL, '') AS double) AS CA_CL,
+    CAST(NULLIF(CA_CL_Available, '') AS double) AS CA_CL_Available,
+    CAST(NULLIF(CP_CL_Usage, '') AS double) AS CP_CL_Usage,
+    CAST(NULLIF(CA_CL_Usage, '') AS double) AS CA_CL_Usage,
+    CAST(NULLIF(CIF_ID, '') AS bigint) AS CIF_ID,
+    CAST(NULLIF(Account_No, '') AS bigint) AS Account_No,
+    Account_Agree_Sts,
+    Virtual_Card_Flag,
+    Wallet_Tier
   FROM ${AWS_GLUE_DB}.dimproduct_csv_staging;" \
   "Populate AWS Glue Apache Iceberg Table (${AWS_GLUE_DB}.${AWS_ICEBERG_TABLE} - 65,000 rows)"
 
 run_athena_query \
   "DROP TABLE IF EXISTS ${AWS_GLUE_DB}.dimproduct_csv_staging;" \
   "Clean up temporary CSV staging table"
+
+# Grant AWS Lake Formation permissions to the Web Identity Role (if Lake Formation is active)
+aws lakeformation grant-permissions \
+  --region "${AWS_REGION}" \
+  --principal "DataLakePrincipalIdentifier=arn:aws:iam::${AWS_ACCOUNT_ID}:role/${AWS_ROLE_NAME}" \
+  --resource "{\"Database\":{\"Name\":\"${AWS_GLUE_DB}\"}}" \
+  --permissions "DESCRIBE" >/dev/null 2>&1 || true
+
+aws lakeformation grant-permissions \
+  --region "${AWS_REGION}" \
+  --principal "DataLakePrincipalIdentifier=arn:aws:iam::${AWS_ACCOUNT_ID}:role/${AWS_ROLE_NAME}" \
+  --resource "{\"Table\":{\"DatabaseName\":\"${AWS_GLUE_DB}\",\"TableWildcard\":{}}}" \
+  --permissions "SELECT" "DESCRIBE" >/dev/null 2>&1 || true
 
 echo ""
 echo "=========================================================================="
