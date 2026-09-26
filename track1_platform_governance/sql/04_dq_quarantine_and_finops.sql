@@ -11,10 +11,19 @@
 -- =============================================================================
 
 -- -----------------------------------------------------------------------------
--- 1. Automated Data Quality Quarantine Table (`acsm_silver.dq_quarantine_records`)
+-- 0. Create Dedicated Observability Dataset (`acsm_observability`) in Singapore
+-- -----------------------------------------------------------------------------
+CREATE SCHEMA IF NOT EXISTS `acsm_observability`
+OPTIONS (
+  location = 'asia-southeast1',
+  description = 'ACSM Platform Observability Layer: FinOps Job Telemetry, Data Quality Quarantine Records, and SLA Monitoring in Singapore (asia-southeast1)'
+);
+
+-- -----------------------------------------------------------------------------
+-- 1. Automated Data Quality Quarantine Table (`acsm_observability.dq_quarantine_records`)
 --    Captures row-level rule violations across Bronze/Silver tables (C1.1.1.6)
 -- -----------------------------------------------------------------------------
-CREATE OR REPLACE TABLE `acsm_silver.dq_quarantine_records`
+CREATE OR REPLACE TABLE `acsm_observability.dq_quarantine_records`
 CLUSTER BY rule_id, source_table
 OPTIONS (
   description = 'Automated Data Quality Quarantine Table capturing records failing DSR, Credit Limit, or CIF completeness rules (Clause C1.1.1.6).'
@@ -60,10 +69,10 @@ FROM `acsm_bronze.m3CIF`
 WHERE CAST(B_NetIncome AS NUMERIC) <= 0;
 
 -- -----------------------------------------------------------------------------
--- 2. Centralised Data Quality Monitoring Dashboard View (`acsm_silver.vw_dq_monitoring_summary`)
+-- 2. Centralised Data Quality Monitoring Dashboard View (`acsm_observability.vw_dq_monitoring_summary`)
 --    Provides real-time pass/quarantine rates for alerting (Clause C1.1.1.7)
 -- -----------------------------------------------------------------------------
-CREATE OR REPLACE VIEW `acsm_silver.vw_dq_monitoring_summary`
+CREATE OR REPLACE VIEW `acsm_observability.vw_dq_monitoring_summary`
 OPTIONS (
   description = 'Centralised Data Quality Monitoring View summarizing rule violations by source table and enforcement action (Clause C1.1.1.7).'
 ) AS
@@ -73,15 +82,15 @@ SELECT
   source_table,
   enforcement_action,
   COUNT(*) AS quarantined_row_count
-FROM `acsm_silver.dq_quarantine_records`
+FROM `acsm_observability.dq_quarantine_records`
 GROUP BY 1, 2, 3, 4
 ORDER BY quarantined_row_count DESC;
 
 -- -----------------------------------------------------------------------------
--- 3. FinOps Cost Visibility & Zombie Query Detection (`acsm_silver.vw_finops_job_telemetry`)
+-- 3. FinOps Cost Visibility & Zombie Query Detection (`acsm_observability.vw_finops_job_telemetry`)
 --    Queries INFORMATION_SCHEMA.JOBS_BY_PROJECT in asia-southeast1 (C1.1.1.18 & C1.1.6.6)
 -- -----------------------------------------------------------------------------
-CREATE OR REPLACE VIEW `acsm_silver.vw_finops_job_telemetry`
+CREATE OR REPLACE VIEW `acsm_observability.vw_finops_job_telemetry`
 OPTIONS (
   description = 'FinOps Cost & Compute Telemetry View tracking bytes billed, slot milliseconds, and zero-cost batch loads in asia-southeast1 (Clauses C1.1.1.18 & C1.1.6.6).'
 ) AS

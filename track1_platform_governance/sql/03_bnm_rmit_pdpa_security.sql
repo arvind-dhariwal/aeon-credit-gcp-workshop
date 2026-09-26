@@ -65,7 +65,7 @@ FROM `acsm_silver.silver_customer_cif`;
 -- -----------------------------------------------------------------------------
 -- 3. Automated PDPA Right-to-Erasure Stored Procedure (Clause C1.1.5.3)
 --    Executes cryptographic anonymization / erasure on `acsm_silver.silver_customer_cif`
---    and logs an immutable BNM RMiT audit record in `acsm_silver.dq_quarantine_records`.
+--    and logs an immutable BNM RMiT audit record in `acsm_observability.dq_quarantine_records`.
 -- -----------------------------------------------------------------------------
 CREATE OR REPLACE PROCEDURE `acsm_silver.sp_execute_pdpa_subject_erasure`(
   target_cif_id STRING,
@@ -80,7 +80,7 @@ BEGIN
   WHERE CIF_ID = target_cif_id;
 
   -- 2. Record immutable compliance audit trail (Clause C1.1.5.6)
-  INSERT INTO `acsm_silver.dq_quarantine_records` (
+  INSERT INTO `acsm_observability.dq_quarantine_records` (
     evaluated_at, source_table, record_key, cif_id, rule_id, enforcement_action, violation_detail
   )
   VALUES (
