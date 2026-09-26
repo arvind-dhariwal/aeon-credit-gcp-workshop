@@ -1,0 +1,35 @@
+rules:
+  - column: CIF_ID
+    dimension: COMPLETENESS
+    nonNullExpectation: {}
+    name: cif_id_not_null
+    description: "Every Customer 360 record must have a non-null One-AEON CIF_ID."
+    threshold: 1.0
+  - column: CIF_ID
+    dimension: UNIQUENESS
+    uniquenessExpectation: {}
+    name: cif_id_unique
+    description: "One-AEON CIF_ID must be 100% unique in gold_aeon_customer360_profile."
+    threshold: 1.0
+  - column: B_AnnualIncome
+    dimension: VALIDITY
+    rangeExpectation:
+      minValue: "0"
+      strictMinEnabled: true
+    name: positive_annual_income
+    description: "Annual income in MYR must be strictly greater than 0."
+    threshold: 0.99
+  - column: avg_ep_new_dsr
+    dimension: VALIDITY
+    rangeExpectation:
+      minValue: "0"
+      maxValue: "100"
+    name: valid_bnm_dsr_range
+    description: "BNM Debt Service Ratio (DSR) must fall within [0, 100] percent."
+    threshold: 0.95
+  - column: State
+    dimension: COMPLETENESS
+    nonNullExpectation: {}
+    name: malaysian_state_not_null
+    description: "Malaysian state must be populated for Row-Level Security (RLS) governance."
+    threshold: 1.0
