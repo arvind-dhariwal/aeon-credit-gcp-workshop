@@ -2,11 +2,12 @@
 """
 ACSM Track 1 — Live Dataform Medallion DAG Orchestration Runner
 Executes the exact Cloud Composer / Apache Airflow operator sequence:
-  1. Auto-discovers the active Dataform Pipeline Repository & Workspace in asia-southeast1
-     (filtering out single-file Notebook repositories that lack workflow_settings.yaml / .sqlx files,
-     and auto-provisioning the Dataform Medallion repository & .sqlx DAG if not yet saved in Step 4).
-  2. Compiles the Dataform Medallion DAG (DataformCreateCompilationResultOperator equivalent)
-  3. Triggers a live Dataform Workflow Invocation (DataformCreateWorkflowInvocationOperator equivalent)
+  1. Provisions & binds a dedicated Dataform execution service account (`acsm-dataform-sa@<PROJECT_ID>.iam.gserviceaccount.com`)
+     to satisfy `strictActAs` org policy checks.
+  2. Auto-discovers or initializes the `acsm-medallion-pipeline` Dataform Repository & `default` Workspace in asia-southeast1
+     with `workflow_settings.yaml` (Dataform Core 3.0.0) and all 7 Medallion + BQML `.sqlx` nodes.
+  3. Compiles the Dataform Medallion DAG (DataformCreateCompilationResultOperator equivalent)
+  4. Triggers a live Dataform Workflow Invocation (DataformCreateWorkflowInvocationOperator equivalent)
 """
 import base64
 import json
@@ -269,6 +270,77 @@ FROM ML.PREDICT(
     }
 
 
+def ensure_dataform_service_account(project_id):
+    """Creates/resolves a dedicated Dataform execution service account and binds strictActAs permissions."""
+    sa_name = "acsm-dataform-sa"
+    sa_email = f"{sa_name}@{project_id}.iam.gserviceaccount.com"
+    project_number = subprocess.check_output(
+        ["gcloud", "projects", "describe", project_id, "--format=value(projectNumber)"],
+        text=True,
+    ).strip()
+    dataform_agent = f"serviceAccount:service-{project_number}@gcp-sa-dataform.iam.gserviceaccount.com"
+
+    # 1. Create service account if it doesn't exist yet
+    desc = subprocess.run(
+        ["gcloud", "iam", "service-accounts", "describe", sa_email, f"--project={project_id}"],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+    if desc.returncode != 0:
+        print(f"🔑 Creating Dataform Execution Service Account: {sa_email}...")
+        subprocess.run(
+            [
+                "gcloud",
+                "iam",
+                "service-accounts",
+                "create",
+                sa_name,
+                "--display-name=ACSM Dataform Medallion Execution SA",
+                f"--project={project_id}",
+                "--quiet",
+            ],
+            check=False,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+        # Grant project roles to the execution SA
+        for role in ["roles/bigquery.dataEditor", "roles/bigquery.jobUser", "roles/bigquery.user", "roles/storage.objectAdmin"]:
+            subprocess.run(
+                [
+                    "gcloud",
+                    "projects",
+                    "add-iam-policy-binding",
+                    project_id,
+                    f"--member=serviceAccount:{sa_email}",
+                    f"--role={role}",
+                    "--quiet",
+                ],
+                check=False,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+        # Grant the Dataform Service Agent permission to impersonate sa_email (required by strictActAs)
+        for sa_role in ["roles/iam.serviceAccountTokenCreator", "roles/iam.serviceAccountUser"]:
+            subprocess.run(
+                [
+                    "gcloud",
+                    "iam",
+                    "service-accounts",
+                    "add-iam-policy-binding",
+                    sa_email,
+                    f"--member={dataform_agent}",
+                    f"--role={sa_role}",
+                    f"--project={project_id}",
+                    "--quiet",
+                ],
+                check=False,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+        time.sleep(5)
+    return sa_email
+
+
 def main():
     project_id = os.environ.get("PROJECT_ID") or subprocess.check_output(
         ["gcloud", "config", "get-value", "project"], text=True
@@ -276,6 +348,8 @@ def main():
     location = os.environ.get("LOCATION", "asia-southeast1")
     repo_id = os.environ.get("DATAFORM_REPOSITORY_ID", "").strip()
     workspace_id = os.environ.get("DATAFORM_WORKSPACE_ID", "").strip()
+
+    dataform_sa = ensure_dataform_service_account(project_id)
 
     token = subprocess.check_output(["gcloud", "auth", "print-access-token"], text=True).strip()
     headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
@@ -329,7 +403,6 @@ def main():
                 r_name = r["name"]
                 r_id = r_name.split("/")[-1]
                 labels = r.get("labels", {})
-                # Skip single-file Notebook or Saved Query repositories created by BigQuery Studio
                 if labels.get("single-file-asset-type") in ("notebook", "sql"):
                     continue
                 ws_resp = call_dataform_api(f"https://dataform.googleapis.com/v1beta1/{r_name}/workspaces")
@@ -361,7 +434,10 @@ def main():
             call_dataform_api(
                 f"{base_url}/repositories?repositoryId={repo_id}",
                 method="POST",
-                payload={"displayName": "ACSM Medallion & BQML Pipeline"},
+                payload={
+                    "displayName": "ACSM Medallion & BQML Pipeline",
+                    "serviceAccount": dataform_sa,
+                },
             )
         except urllib.error.HTTPError as e:
             if e.code != 409:
@@ -375,6 +451,16 @@ def main():
         except urllib.error.HTTPError as e:
             if e.code != 409:
                 raise
+
+    # Ensure the repository has serviceAccount configured for strictActAs checks
+    try:
+        call_dataform_api(
+            f"{base_url}/repositories/{repo_id}?updateMask=serviceAccount",
+            method="PATCH",
+            payload={"serviceAccount": dataform_sa},
+        )
+    except Exception:
+        pass
 
     # 3. Ensure `workflow_settings.yaml` (Dataform Core 3.x) and .sqlx definitions exist in the target workspace
     ws_files = get_workspace_files(discovered_ws_full_name)
@@ -409,6 +495,7 @@ def main():
     print(f"   • Target Region              : {location}")
     print(f"   • Dataform Repository ID     : {repo_id}")
     print(f"   • Dataform Workspace         : {workspace_id}")
+    print(f"   • Execution Service Account  : {dataform_sa}")
     print(
         f"   • Cloud Composer Deploy Cmd  : "
         f"gcloud composer environments storage dags import --environment=<COMPOSER_ENV> --location={location} --source={dag_path}"
@@ -438,13 +525,14 @@ def main():
         else:
             print(f"   ✅ Compilation Result Created: {comp_name}")
 
-        print("   2️⃣ [DataformCreateWorkflowInvocationOperator] Triggering Dataform DAG execution...")
+        print(f"   2️⃣ [DataformCreateWorkflowInvocationOperator] Triggering Dataform DAG execution (SA: {dataform_sa})...")
         inv_payload = {
             "compilationResult": comp_name,
             "invocationConfig": {
                 "transitiveDependenciesIncluded": True,
                 "transitiveDependentsIncluded": True,
                 "fullyRefreshIncrementalTablesEnabled": False,
+                "serviceAccount": dataform_sa,
             },
         }
         inv_res = call_dataform_api(
@@ -456,7 +544,7 @@ def main():
         inv_state = inv_res.get("state", "RUNNING")
         print(f"   ✅ Workflow Invocation Started: {inv_name} (Initial State: {inv_state})")
 
-        for _ in range(12):
+        for _ in range(18):
             time.sleep(5)
             status_res = call_dataform_api(f"https://dataform.googleapis.com/v1beta1/{inv_name}")
             inv_state = status_res.get("state", "UNKNOWN")

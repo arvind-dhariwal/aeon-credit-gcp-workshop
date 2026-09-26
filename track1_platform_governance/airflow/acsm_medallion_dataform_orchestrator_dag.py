@@ -22,22 +22,29 @@ PROJECT_ID = (
     or Variable.get("gcp_project", default_var=_default_project)
 )
 REGION = os.environ.get("LOCATION") or Variable.get("gcp_location", default_var="asia-southeast1")
-REPOSITORY_ID = os.environ.get("DATAFORM_REPOSITORY_ID") or Variable.get("dataform_repository_id", default_var="acsm-medallion-pipeline")
-
+REPOSITORY_ID = os.environ.get("DATAFORM_REPOSITORY_ID") or Variable.get(
+    "dataform_repository_id", default_var="acsm-medallion-pipeline"
+)
+WORKSPACE_ID = os.environ.get("DATAFORM_WORKSPACE_ID") or Variable.get(
+    "dataform_workspace_id", default_var="default"
+)
+DATAFORM_SERVICE_ACCOUNT = os.environ.get("DATAFORM_SERVICE_ACCOUNT") or Variable.get(
+    "dataform_service_account", default_var=f"acsm-dataform-sa@{PROJECT_ID}.iam.gserviceaccount.com"
+)
 
 
 def sla_breach_alert_callback(context):
     """Automated SLA & Data Quality breach notification hook (RFP Clause C1.1.1.7)."""
     task_id = context.get("task_instance").task_id
     dag_id = context.get("dag").dag_id
-    exec_date = context.get("execution_date")
+    exec_date = context.get("logical_date") or context.get("execution_date")
     print(f"[SLA ALERT] DAG={dag_id} | Task={task_id} breached SLA/DQ check at {exec_date}")
 
 
 default_args = {
     "owner": "acsm-data-engineering",
     "depends_on_past": False,
-    "email_on_failure": True,
+    "email_on_failure": False,
     "retries": 1,
     "retry_delay": timedelta(minutes=5),
     "on_failure_callback": sla_breach_alert_callback,
@@ -47,7 +54,7 @@ with DAG(
     dag_id="acsm_medallion_dataform_orchestrator",
     description="Orchestrates ACSM Bronze -> Silver -> Gold + BQML Dataform DAG in Singapore (asia-southeast1)",
     default_args=default_args,
-    schedule_interval="0 2 * * *",  # Daily at 02:00 AM MYT/SGT (UTC+8 adjusted)
+    schedule="0 2 * * *",  # Daily at 02:00 AM MYT/SGT (UTC+8 adjusted)
     start_date=datetime(2026, 1, 1),
     catchup=False,
     max_active_runs=1,
@@ -69,33 +76,36 @@ with DAG(
         location=REGION,
     )
 
-    # 2. Compile the Dataform Repository (resolving Bronze -> Silver -> Gold -> BQML dependency graph)
+    # 2. Compile the Dataform Repository Workspace (resolving Bronze -> Silver -> Gold -> BQML dependency graph)
     compile_dataform_medallion_repo = DataformCreateCompilationResultOperator(
         task_id="compile_dataform_medallion_repo",
         project_id=PROJECT_ID,
         region=REGION,
         repository_id=REPOSITORY_ID,
         compilation_result={
-            "git_commitish": "main",
+            "workspace": f"projects/{PROJECT_ID}/locations/{REGION}/repositories/{REPOSITORY_ID}/workspaces/{WORKSPACE_ID}",
             "code_compilation_config": {
                 "default_database": PROJECT_ID,
                 "default_location": REGION,
+                "default_schema": "acsm_silver",
+                "assertion_schema": "acsm_silver",
             },
         },
     )
 
-    # 3. Invoke the Compiled Dataform Workflow (Silver Incremental + Assertions + BQML Model + Gold Batch Scoring)
+    # 3. Invoke the Compiled Dataform Workflow (Silver + Assertions + BQML Model + Gold Batch Scoring)
     invoke_dataform_medallion_dag = DataformCreateWorkflowInvocationOperator(
         task_id="invoke_dataform_medallion_dag",
         project_id=PROJECT_ID,
         region=REGION,
         repository_id=REPOSITORY_ID,
         workflow_invocation={
-            "compilation_result": "{{ task_instance.xcom_pull('compile_dataform_medallion_repo')['name'] }}",
+            "compilation_result": "{{ task_instance.xcom_pull(task_ids='compile_dataform_medallion_repo')['name'] }}",
             "invocation_config": {
                 "transitive_dependencies_included": True,
                 "transitive_dependents_included": True,
                 "fully_refresh_incremental_tables_enabled": False,
+                "service_account": DATAFORM_SERVICE_ACCOUNT,
             },
         },
     )
