@@ -206,7 +206,42 @@ LEFT JOIN `acsm_silver.silver_collections_summary` col USING (CIF_ID)
 LEFT JOIN card_agg crd USING (CIF_ID);
 
 -- -----------------------------------------------------------------------------
--- 6. Dual-Run Automated Financial Reconciliation Audit (`acsm_silver.recon_audit_log`)
+-- 6. Silver BQML Delinquency Model (`acsm_silver.model_delinquency_propensity`)
+-- -----------------------------------------------------------------------------
+CREATE OR REPLACE MODEL `acsm_silver.model_delinquency_propensity`
+OPTIONS (
+  MODEL_TYPE = 'LOGISTIC_REG',
+  INPUT_LABEL_COLS = ['delinquency_risk_flag'],
+  AUTO_CLASS_WEIGHTS = TRUE,
+  MAX_ITERATIONS = 5
+) AS
+SELECT
+  N_Age,
+  B_NetIncome,
+  B_AnnualIncome,
+  State,
+  Region,
+  Occupation,
+  IF(COALESCE(combined_unpaid_osp, 0) > 0, 1, 0) AS delinquency_risk_flag
+FROM `acsm_gold.gold_aeon360_customer_profile`;
+
+-- -----------------------------------------------------------------------------
+-- 7. Gold Batch BQML Predictions (`acsm_gold.gold_aeon360_batch_ml_predictions`)
+-- -----------------------------------------------------------------------------
+CREATE OR REPLACE TABLE `acsm_gold.gold_aeon360_batch_ml_predictions`
+CLUSTER BY State, CIF_ID
+OPTIONS (
+  description = 'Gold Batch BQML Delinquency Risk Predictions scoring all 100,000 customers via ML.PREDICT(MODEL acsm_silver.model_delinquency_propensity).'
+) AS
+SELECT
+  *
+FROM ML.PREDICT(
+  MODEL `acsm_silver.model_delinquency_propensity`,
+  TABLE `acsm_gold.gold_aeon360_customer_profile`
+);
+
+-- -----------------------------------------------------------------------------
+-- 8. Dual-Run Automated Financial Reconciliation Audit (`acsm_silver.recon_audit_log`)
 -- -----------------------------------------------------------------------------
 CREATE OR REPLACE TABLE `acsm_silver.recon_audit_log`
 OPTIONS (
