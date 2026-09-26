@@ -2,16 +2,271 @@
 """
 ACSM Track 1 — Live Dataform Medallion DAG Orchestration Runner
 Executes the exact Cloud Composer / Apache Airflow operator sequence:
-  1. Auto-discovers the active Dataform Repository & Workspace in asia-southeast1
+  1. Auto-discovers the active Dataform Pipeline Repository & Workspace in asia-southeast1
+     (filtering out single-file Notebook repositories that lack workflow_settings.yaml / .sqlx files,
+     and auto-provisioning the Dataform Medallion repository & .sqlx DAG if not yet saved in Step 4).
   2. Compiles the Dataform Medallion DAG (DataformCreateCompilationResultOperator equivalent)
   3. Triggers a live Dataform Workflow Invocation (DataformCreateWorkflowInvocationOperator equivalent)
 """
+import base64
 import json
 import os
 import subprocess
 import time
 import urllib.error
 import urllib.request
+
+
+def get_medallion_sqlx_files():
+    """Returns the Dataform .sqlx files matching the Step 4 Medallion + BQML DAG."""
+    return {
+        "definitions/silver_customer_cif.sqlx": """config {
+  type: "table",
+  schema: "acsm_silver",
+  name: "silver_customer_cif",
+  description: "Governed Silver Customer Master (m3CIF) deduplicated by CIF_ID",
+  bigquery: {
+    clusterBy: ["CIF_ID", "State"]
+  },
+  assertions: {
+    nonNull: ["CIF_ID"],
+    uniqueKey: ["CIF_ID"]
+  }
+}
+
+SELECT
+  CAST(CIF_ID AS STRING) AS CIF_ID,
+  SAFE.PARSE_DATE('%Y-%m-%d', SUBSTR(CAST(Rcd_DT AS STRING), 1, 10)) AS record_refresh_date,
+  TRIM(CAST(CIF_NM AS STRING)) AS CIF_NM,
+  TRIM(CAST(Gender AS STRING)) AS Gender,
+  TRIM(CAST(MaritalSts AS STRING)) AS MaritalSts,
+  TRIM(CAST(Citizen AS STRING)) AS Citizen,
+  TRIM(CAST(State AS STRING)) AS State,
+  TRIM(CAST(Region AS STRING)) AS Region,
+  TRIM(CAST(Race AS STRING)) AS Race,
+  TRIM(CAST(Occupation AS STRING)) AS Occupation,
+  CAST(EmpSts AS INT64) AS EmpSts,
+  CAST(N_Age AS INT64) AS N_Age,
+  CAST(N_YrStay AS NUMERIC) AS N_YrStay,
+  CAST(N_YrJob AS NUMERIC) AS N_YrJob,
+  CAST(B_NetIncome AS NUMERIC) AS B_NetIncome,
+  CAST(B_GrossIncome AS NUMERIC) AS B_GrossIncome,
+  CAST(B_AnnualIncome AS NUMERIC) AS B_AnnualIncome,
+  COALESCE(TRIM(CAST(RecvPromo_FG AS STRING)), 'N') AS RecvPromo_FG
+FROM `acsm_bronze.m3CIF`
+QUALIFY ROW_NUMBER() OVER (PARTITION BY CAST(CIF_ID AS STRING) ORDER BY Rcd_DT DESC) = 1
+""",
+        "definitions/silver_ep_underwriting.sqlx": """config {
+  type: "table",
+  schema: "acsm_silver",
+  name: "silver_ep_underwriting",
+  description: "Governed Silver Easy Payment (EP) Application & Underwriting Decisions",
+  bigquery: {
+    clusterBy: ["CIF_ID", "APPL_STS"]
+  },
+  assertions: {
+    nonNull: ["APPL_NO", "CIF_ID"]
+  }
+}
+
+SELECT
+  CAST(APPL_NO AS STRING) AS APPL_NO,
+  CAST(AGREE_NO AS STRING) AS AGREE_NO,
+  CAST(CIF_NO AS STRING) AS CIF_ID,
+  SAFE.PARSE_DATE('%Y%m%d', NULLIF(TRIM(CAST(APPL_DT AS STRING)), '0')) AS application_date,
+  TRIM(CAST(APPL_STS AS STRING)) AS APPL_STS,
+  CAST(SCORING_POINT AS NUMERIC) AS SCORING_POINT,
+  TRIM(CAST(SCORING_RANK AS STRING)) AS SCORING_RANK,
+  TRIM(CAST(SCORE_DECISION AS STRING)) AS SCORE_DECISION,
+  TRIM(CAST(LOAN_GRP AS STRING)) AS LOAN_GRP,
+  CAST(FIN_AMT AS NUMERIC) AS FIN_AMT,
+  CAST(INST_AMT AS NUMERIC) AS INST_AMT,
+  CAST(INTEREST AS NUMERIC) AS INTEREST,
+  CAST(TOTAL_INST AS INT64) AS TOTAL_INST,
+  CAST(NetIncome AS NUMERIC) AS NetIncome,
+  CAST(NDI AS NUMERIC) AS NDI,
+  CAST(CUR_DSR AS NUMERIC) AS CUR_DSR,
+  CAST(NEW_DSR AS NUMERIC) AS NEW_DSR,
+  CAST(TOTAL_AEON_OSB AS NUMERIC) AS TOTAL_AEON_OSB
+FROM `acsm_bronze.Fact_EP_Judge`
+""",
+        "definitions/silver_cc_underwriting.sqlx": """config {
+  type: "table",
+  schema: "acsm_silver",
+  name: "silver_cc_underwriting",
+  description: "Governed Silver Credit Card Application & Underwriting Decisions",
+  bigquery: {
+    clusterBy: ["CIF_ID", "ApplSts_ID"]
+  },
+  assertions: {
+    nonNull: ["Appl_ID", "CIF_ID"]
+  }
+}
+
+SELECT
+  CAST(Appl_ID AS STRING) AS Appl_ID,
+  CAST(Account_No AS STRING) AS Account_No,
+  CAST(CIF_ID AS STRING) AS CIF_ID,
+  SAFE.PARSE_DATE('%Y%m%d', NULLIF(TRIM(CAST(Appl_DT AS STRING)), '0')) AS application_date,
+  TRIM(CAST(ApplSts_ID AS STRING)) AS ApplSts_ID,
+  TRIM(CAST(CardTyp_ID AS STRING)) AS CardTyp_ID,
+  TRIM(CAST(CardBrand_ID AS STRING)) AS CardBrand_ID,
+  TRIM(CAST(ScoreDecision_ID AS STRING)) AS ScoreDecision_ID,
+  TRIM(CAST(ScoreRank_ID AS STRING)) AS ScoreRank_ID,
+  CAST(NetIncome AS NUMERIC) AS NetIncome,
+  CAST(NDI AS NUMERIC) AS NDI,
+  CAST(CurrDSR AS NUMERIC) AS CurrDSR,
+  CAST(NewDSR AS NUMERIC) AS NewDSR,
+  CAST(B_CrLimit AS NUMERIC) AS B_CrLimit,
+  CAST(Final_Score AS NUMERIC) AS Final_Score,
+  TRIM(CAST(Final_ScoreDesc AS STRING)) AS Final_ScoreDesc
+FROM `acsm_bronze.Fact_CC_Judge`
+""",
+        "definitions/silver_collections_summary.sqlx": """config {
+  type: "table",
+  schema: "acsm_silver",
+  name: "silver_collections_summary",
+  description: "Customer-level Silver Collections & Delinquency Summary across EP and CC",
+  bigquery: {
+    clusterBy: ["CIF_ID"]
+  }
+}
+
+WITH ep_col AS (
+  SELECT
+    CAST(CIF_No AS STRING) AS CIF_ID,
+    SUM(CAST(Unpaid_OSP AS NUMERIC)) AS total_ep_unpaid_osp,
+    MAX(TRIM(CAST(Score_Grade AS STRING))) AS ep_worst_grade
+  FROM `acsm_bronze.Fact_EP_Collection`
+  GROUP BY 1
+),
+cc_col AS (
+  SELECT
+    CAST(CIF_No AS STRING) AS CIF_ID,
+    SUM(CAST(Unpaid_OSP AS NUMERIC)) AS total_cc_unpaid_osp,
+    MAX(TRIM(CAST(Score_Grade AS STRING))) AS cc_worst_grade
+  FROM `acsm_bronze.Fact_CC_Collection`
+  GROUP BY 1
+)
+SELECT
+  COALESCE(ep.CIF_ID, cc.CIF_ID) AS CIF_ID,
+  COALESCE(ep.total_ep_unpaid_osp, 0) AS total_ep_unpaid_osp,
+  COALESCE(cc.total_cc_unpaid_osp, 0) AS total_cc_unpaid_osp,
+  COALESCE(ep.total_ep_unpaid_osp, 0) + COALESCE(cc.total_cc_unpaid_osp, 0) AS combined_unpaid_osp,
+  GREATEST(COALESCE(ep.ep_worst_grade, 'A'), COALESCE(cc.cc_worst_grade, 'A')) AS worst_collection_score_grade
+FROM ep_col ep
+FULL OUTER JOIN cc_col cc
+  ON ep.CIF_ID = cc.CIF_ID
+""",
+        "definitions/gold_aeon_customer360_profile.sqlx": """config {
+  type: "table",
+  schema: "acsm_gold",
+  name: "gold_aeon_customer360_profile",
+  description: "Gold AEON Customer 360 Risk, Affordability & Credit Exposure Feature Store",
+  bigquery: {
+    clusterBy: ["State", "CIF_ID"]
+  }
+}
+
+WITH ep_agg AS (
+  SELECT
+    CIF_ID,
+    COUNT(*) AS ep_app_count,
+    ROUND(SUM(COALESCE(FIN_AMT, 0)), 2) AS total_ep_financed_myr,
+    ROUND(AVG(NEW_DSR), 2) AS avg_ep_new_dsr
+  FROM ${ref("acsm_silver", "silver_ep_underwriting")}
+  GROUP BY CIF_ID
+),
+cc_agg AS (
+  SELECT
+    CIF_ID,
+    COUNT(*) AS cc_app_count,
+    ROUND(SUM(COALESCE(B_CrLimit, 0)), 2) AS total_cc_limit_myr,
+    MAX(Final_Score) AS latest_ctos_score
+  FROM ${ref("acsm_silver", "silver_cc_underwriting")}
+  GROUP BY CIF_ID
+),
+card_agg AS (
+  SELECT
+    CAST(CIF_ID AS STRING) AS CIF_ID,
+    COUNTIF(TRIM(CAST(Card_Status AS STRING)) = 'Active') AS active_card_count,
+    ROUND(SUM(CAST(CP_CL_Usage AS NUMERIC)), 2) AS total_cp_usage_myr,
+    ROUND(SUM(CAST(CP_CL_Available AS NUMERIC)), 2) AS total_cp_available_myr
+  FROM `acsm_bronze.dimProduct`
+  GROUP BY 1
+)
+SELECT
+  c.CIF_ID,
+  c.CIF_NM,
+  c.State,
+  c.Region,
+  c.Occupation,
+  c.N_Age,
+  c.B_NetIncome,
+  c.B_AnnualIncome,
+  c.RecvPromo_FG,
+  COALESCE(ep.ep_app_count, 0) AS ep_app_count,
+  COALESCE(ep.total_ep_financed_myr, 0) AS total_ep_financed_myr,
+  ep.avg_ep_new_dsr,
+  COALESCE(cc.cc_app_count, 0) AS cc_app_count,
+  COALESCE(cc.total_cc_limit_myr, 0) AS total_cc_limit_myr,
+  cc.latest_ctos_score,
+  COALESCE(col.total_ep_unpaid_osp, 0) AS total_ep_unpaid_osp,
+  COALESCE(col.total_cc_unpaid_osp, 0) AS total_cc_unpaid_osp,
+  COALESCE(col.combined_unpaid_osp, 0) AS combined_unpaid_osp,
+  COALESCE(col.worst_collection_score_grade, 'NONE') AS worst_collection_score_grade,
+  COALESCE(crd.active_card_count, 0) AS active_card_count,
+  COALESCE(crd.total_cp_usage_myr, 0) AS total_cp_usage_myr,
+  COALESCE(crd.total_cp_available_myr, 0) AS total_cp_available_myr
+FROM ${ref("acsm_silver", "silver_customer_cif")} c
+LEFT JOIN ep_agg ep USING (CIF_ID)
+LEFT JOIN cc_agg cc USING (CIF_ID)
+LEFT JOIN ${ref("acsm_silver", "silver_collections_summary")} col USING (CIF_ID)
+LEFT JOIN card_agg crd USING (CIF_ID)
+""",
+        "definitions/model_delinquency_propensity.sqlx": """config {
+  type: "operations",
+  hasOutput: true,
+  schema: "acsm_silver",
+  name: "model_delinquency_propensity",
+  description: "BQML Logistic Regression Delinquency Propensity Model"
+}
+
+CREATE OR REPLACE MODEL ${self()}
+OPTIONS (
+  MODEL_TYPE = 'LOGISTIC_REG',
+  INPUT_LABEL_COLS = ['delinquency_risk_flag'],
+  AUTO_CLASS_WEIGHTS = TRUE,
+  MAX_ITERATIONS = 5
+) AS
+SELECT
+  N_Age,
+  B_NetIncome,
+  B_AnnualIncome,
+  State,
+  Region,
+  Occupation,
+  IF(COALESCE(combined_unpaid_osp, 0) > 0, 1, 0) AS delinquency_risk_flag
+FROM ${ref("acsm_gold", "gold_aeon_customer360_profile")}
+""",
+        "definitions/gold_aeon360_batch_ml_predictions.sqlx": """config {
+  type: "table",
+  schema: "acsm_gold",
+  name: "gold_aeon360_batch_ml_predictions",
+  description: "Gold Batch BQML Delinquency Propensity Predictions",
+  bigquery: {
+    clusterBy: ["State", "CIF_ID"]
+  }
+}
+
+SELECT
+  *
+FROM ML.PREDICT(
+  MODEL ${ref("acsm_silver", "model_delinquency_propensity")},
+  TABLE ${ref("acsm_gold", "gold_aeon_customer360_profile")}
+)
+""",
+    }
 
 
 def main():
@@ -29,35 +284,124 @@ def main():
         data = json.dumps(payload).encode("utf-8") if payload is not None else None
         req = urllib.request.Request(url, data=data, headers=headers, method=method)
         with urllib.request.urlopen(req, timeout=30) as resp:
-            return json.loads(resp.read().decode("utf-8"))
+            raw = resp.read().decode("utf-8")
+            return json.loads(raw) if raw else {}
+
+    def write_workspace_file(ws_full_name, file_path, text_content):
+        b64_content = base64.b64encode(text_content.encode("utf-8")).decode("utf-8")
+        call_dataform_api(
+            f"https://dataform.googleapis.com/v1beta1/{ws_full_name}:writeFile",
+            method="POST",
+            payload={"path": file_path, "contents": b64_content},
+        )
+
+    def get_workspace_files(ws_full_name):
+        try:
+            res = call_dataform_api(
+                f"https://dataform.googleapis.com/v1beta1/{ws_full_name}:queryDirectoryContents"
+            )
+            entries = res.get("directoryEntries", [])
+            files = []
+            for entry in entries:
+                if "file" in entry:
+                    files.append(entry["file"])
+                elif "directory" in entry:
+                    sub_dir = entry["directory"]
+                    sub_res = call_dataform_api(
+                        f"https://dataform.googleapis.com/v1beta1/{ws_full_name}:queryDirectoryContents?path={sub_dir}"
+                    )
+                    for sub_e in sub_res.get("directoryEntries", []):
+                        if "file" in sub_e:
+                            files.append(sub_e["file"])
+            return files
+        except Exception:
+            return []
 
     base_url = f"https://dataform.googleapis.com/v1beta1/projects/{project_id}/locations/{location}"
 
+    # 1. Discover an existing Dataform Pipeline Repository & Workspace (skipping single-file Notebook repositories!)
+    discovered_ws_full_name = None
     if not repo_id:
         try:
             repos_resp = call_dataform_api(f"{base_url}/repositories")
             repos = repos_resp.get("repositories", [])
-            if repos:
-                repo_id = repos[-1]["name"].split("/")[-1]
-                print(f"🔍 Auto-discovered Dataform Repository in {location}: {repo_id}")
-            else:
-                repo_id = "acsm-medallion-pipeline"
-                print(f"ℹ️ No existing Dataform repository found in {location}; using template ID: {repo_id}")
+            for r in reversed(repos):
+                r_name = r["name"]
+                r_id = r_name.split("/")[-1]
+                labels = r.get("labels", {})
+                # Skip single-file Notebook or Saved Query repositories created by BigQuery Studio
+                if labels.get("single-file-asset-type") in ("notebook", "sql"):
+                    continue
+                ws_resp = call_dataform_api(f"https://dataform.googleapis.com/v1beta1/{r_name}/workspaces")
+                for ws in ws_resp.get("workspaces", []):
+                    ws_files = get_workspace_files(ws["name"])
+                    has_sqlx = any(f.endswith(".sqlx") for f in ws_files)
+                    has_ipynb_only = any(f.endswith(".ipynb") for f in ws_files) and not has_sqlx
+                    if has_ipynb_only:
+                        continue
+                    if has_sqlx or r_id == "acsm-medallion-pipeline" or labels.get("single-file-asset-type") == "pipeline":
+                        repo_id = r_id
+                        workspace_id = ws["name"].split("/")[-1]
+                        discovered_ws_full_name = ws["name"]
+                        print(f"🔍 Auto-discovered Dataform Pipeline Repository in {location}: {repo_id} (workspace: {workspace_id})")
+                        break
+                if discovered_ws_full_name:
+                    break
         except Exception as e:
-            repo_id = "acsm-medallion-pipeline"
-            print(f"ℹ️ Using default template Repository ID ({repo_id}): {e}")
+            print(f"ℹ️ Repository scan note: {e}")
 
-    if not workspace_id:
+    # 2. If no Pipeline workspace with .sqlx files was found, create/initialize `acsm-medallion-pipeline`
+    if not discovered_ws_full_name:
+        repo_id = repo_id or "acsm-medallion-pipeline"
+        workspace_id = workspace_id or "default"
+        repo_full_name = f"projects/{project_id}/locations/{location}/repositories/{repo_id}"
+        discovered_ws_full_name = f"{repo_full_name}/workspaces/{workspace_id}"
+        print(f"⚙️ Initializing Dataform Medallion Repository `{repo_id}` (workspace: `{workspace_id}`) in {location}...")
         try:
-            ws_resp = call_dataform_api(f"{base_url}/repositories/{repo_id}/workspaces")
-            workspaces = ws_resp.get("workspaces", [])
-            if workspaces:
-                workspace_id = workspaces[0]["name"].split("/")[-1]
-                print(f"🔍 Auto-discovered Dataform Workspace: {workspace_id}")
-            else:
-                workspace_id = "default"
-        except Exception:
-            workspace_id = "default"
+            call_dataform_api(
+                f"{base_url}/repositories?repositoryId={repo_id}",
+                method="POST",
+                payload={"displayName": "ACSM Medallion & BQML Pipeline"},
+            )
+        except urllib.error.HTTPError as e:
+            if e.code != 409:
+                raise
+        try:
+            call_dataform_api(
+                f"{base_url}/repositories/{repo_id}/workspaces?workspaceId={workspace_id}",
+                method="POST",
+                payload={},
+            )
+        except urllib.error.HTTPError as e:
+            if e.code != 409:
+                raise
+
+    # 3. Ensure `workflow_settings.yaml` (Dataform Core 3.x) and .sqlx definitions exist in the target workspace
+    ws_files = get_workspace_files(discovered_ws_full_name)
+    if "workflow_settings.yaml" not in ws_files and "dataform.json" not in ws_files:
+        workflow_settings_yaml = (
+            f"dataformCoreVersion: 3.0.0\n"
+            f"defaultProject: {project_id}\n"
+            f"defaultLocation: {location}\n"
+            f"defaultDataset: acsm_silver\n"
+            f"defaultAssertionDataset: acsm_silver\n"
+        )
+        write_workspace_file(discovered_ws_full_name, "workflow_settings.yaml", workflow_settings_yaml)
+        print("   • Created `workflow_settings.yaml` (Dataform Core 3.0.0) in workspace.")
+
+    if not any(f.endswith(".sqlx") for f in ws_files):
+        try:
+            call_dataform_api(
+                f"https://dataform.googleapis.com/v1beta1/{discovered_ws_full_name}:makeDirectory",
+                method="POST",
+                payload={"path": "definitions"},
+            )
+        except urllib.error.HTTPError:
+            pass
+        sqlx_map = get_medallion_sqlx_files()
+        for path, content in sqlx_map.items():
+            write_workspace_file(discovered_ws_full_name, path, content)
+        print(f"   • Seeded {len(sqlx_map)} Medallion & BQML `.sqlx` pipeline nodes into `{workspace_id}`.")
 
     dag_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "acsm_medallion_dataform_orchestrator_dag.py")
     print(f"✅ Airflow DAG Definition Ready : {dag_path}")
@@ -72,24 +416,16 @@ def main():
 
     print("\n🚀 Executing Airflow Orchestration Sequence against Dataform API...")
     try:
+        print(f"   1️⃣ [DataformCreateCompilationResultOperator] Compiling workspace: {discovered_ws_full_name}")
         compile_payload = {
+            "workspace": discovered_ws_full_name,
             "codeCompilationConfig": {
                 "defaultDatabase": project_id,
                 "defaultLocation": location,
-            }
+                "defaultSchema": "acsm_silver",
+                "assertionSchema": "acsm_silver",
+            },
         }
-        try:
-            ws_check = call_dataform_api(f"{base_url}/repositories/{repo_id}/workspaces")
-            if ws_check.get("workspaces"):
-                ws_full_name = ws_check["workspaces"][0]["name"]
-                compile_payload["workspace"] = ws_full_name
-                print(f"   1️⃣ [DataformCreateCompilationResultOperator] Compiling workspace: {ws_full_name}")
-            else:
-                compile_payload["gitCommitish"] = "main"
-                print(f"   1️⃣ [DataformCreateCompilationResultOperator] Compiling branch 'main' in {repo_id}")
-        except Exception:
-            compile_payload["gitCommitish"] = "main"
-
         comp_res = call_dataform_api(
             f"{base_url}/repositories/{repo_id}/compilationResults",
             method="POST",
@@ -120,7 +456,7 @@ def main():
         inv_state = inv_res.get("state", "RUNNING")
         print(f"   ✅ Workflow Invocation Started: {inv_name} (Initial State: {inv_state})")
 
-        for _ in range(6):
+        for _ in range(12):
             time.sleep(5)
             status_res = call_dataform_api(f"https://dataform.googleapis.com/v1beta1/{inv_name}")
             inv_state = status_res.get("state", "UNKNOWN")
@@ -130,11 +466,7 @@ def main():
         print(f"   🎯 Final Observed Dataform Workflow State: {inv_state}")
     except urllib.error.HTTPError as http_err:
         err_body = http_err.read().decode("utf-8", errors="ignore")
-        print(
-            f"   ℹ️ Live Dataform API invocation skipped or repo not yet created in Step 4 "
-            f"(HTTP {http_err.code}): {err_body[:300]}"
-        )
-        print("   💡 Tip: Once you create and save your Pipeline in Step 4, re-run this cell to trigger it via the Dataform API!")
+        print(f"   ⚠️ Dataform API returned HTTP {http_err.code}: {err_body[:400]}")
     except Exception as ex:
         print(f"   ℹ️ Live Dataform API invocation note: {ex}")
 
