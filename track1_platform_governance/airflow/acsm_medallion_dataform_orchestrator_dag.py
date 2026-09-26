@@ -5,16 +5,25 @@ RFP Clauses: C1.1.1.5 (Orchestration), C1.1.1.6 (Data Quality Assertions), C1.1.
 """
 import os
 from datetime import datetime, timedelta
+import google.auth
 from airflow import DAG
+from airflow.models import Variable
 from airflow.providers.google.cloud.operators.bigquery import BigQueryCheckOperator
 from airflow.providers.google.cloud.operators.dataform import (
     DataformCreateCompilationResultOperator,
     DataformCreateWorkflowInvocationOperator,
 )
 
-PROJECT_ID = os.environ.get("PROJECT_ID", "acsm-gcp-workshop")
-REGION = os.environ.get("LOCATION", "asia-southeast1")
-REPOSITORY_ID = os.environ.get("DATAFORM_REPOSITORY_ID", "acsm-medallion-pipeline")
+_, _default_project = google.auth.default()
+PROJECT_ID = (
+    os.environ.get("PROJECT_ID")
+    or os.environ.get("GOOGLE_CLOUD_PROJECT")
+    or os.environ.get("GCP_PROJECT")
+    or Variable.get("gcp_project", default_var=_default_project)
+)
+REGION = os.environ.get("LOCATION") or Variable.get("gcp_location", default_var="asia-southeast1")
+REPOSITORY_ID = os.environ.get("DATAFORM_REPOSITORY_ID") or Variable.get("dataform_repository_id", default_var="acsm-medallion-pipeline")
+
 
 
 def sla_breach_alert_callback(context):
