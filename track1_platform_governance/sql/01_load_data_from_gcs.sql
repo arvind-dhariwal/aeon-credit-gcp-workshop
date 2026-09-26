@@ -1,7 +1,7 @@
 -- =============================================================================
--- DEMO FLOW 2 (STEP 2 OF 2): Serverless SQL `LOAD DATA OVERWRITE` from GCS
+-- Serverless SQL `LOAD DATA OVERWRITE` from GCS for All 8 `acsm_bronze` Tables
 -- Dynamically resolves `@@project_id` (`gs://acsm-workshop-landing-${PROJECT_ID}/full_compressed/`)
--- into the 8 pre-created `acsm_bronze` tables while preserving all 226 column descriptions.
+-- into the 8 pre-created `acsm_bronze` tables (`1,398,284` rows) while preserving all 241 column descriptions.
 -- Zero compute provisioning required | $0 BigQuery batch load cost (0 B billed).
 -- =============================================================================
 
@@ -68,6 +68,28 @@ LOAD DATA OVERWRITE `acsm_bronze.Fact_CC_Collection`
 FROM FILES (
   format = 'CSV',
   uris = ['%s/Fact_CC_Collection.csv.gz'],
+  skip_leading_rows = 1,
+  allow_quoted_newlines = TRUE
+);
+""", bucket_uri);
+
+-- 7. Load m3CIF (100,000 rows)
+EXECUTE IMMEDIATE FORMAT("""
+LOAD DATA OVERWRITE `acsm_bronze.m3CIF`
+FROM FILES (
+  format = 'CSV',
+  uris = ['%s/m3CIF.csv.gz'],
+  skip_leading_rows = 1,
+  allow_quoted_newlines = TRUE
+);
+""", bucket_uri);
+
+-- 8. Load dimProduct (65,000 rows)
+EXECUTE IMMEDIATE FORMAT("""
+LOAD DATA OVERWRITE `acsm_bronze.dimProduct`
+FROM FILES (
+  format = 'CSV',
+  uris = ['%s/dimProduct.csv.gz'],
   skip_leading_rows = 1,
   allow_quoted_newlines = TRUE
 );

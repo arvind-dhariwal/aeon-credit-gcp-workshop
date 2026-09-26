@@ -1,8 +1,8 @@
 -- =============================================================================
--- DEMO FLOW 2 (STEP 1 OF 2): Create 8 ACSM Tables with Table & Column Descriptions
+-- Create All 8 ACSM Base Tables in `acsm_bronze` with Table & Column Descriptions
 -- Project: `<PROJECT_ID>` (e.g. `${PROJECT_ID}`) | Dataset: `acsm_bronze`
 -- Location: `asia-southeast1` (Singapore)
--- Source Dictionary: `Mock Metadata.xlsx` (8 tables, 226 described columns)
+-- Source Dictionary: `Mock Metadata.xlsx` (8 tables: Fact_EP_Judge, Fact_EP_Sales, Fact_EP_Collection, Fact_CC_Judge, Fact_CC_Sales, Fact_CC_Collection, m3CIF, dimProduct | 241 described columns)
 -- =============================================================================
 
 CREATE SCHEMA IF NOT EXISTS `acsm_bronze`
@@ -10,6 +10,18 @@ OPTIONS (
   location = "asia-southeast1",
   description = "AEON Credit Service Malaysia (ACSM) — 8 Core Tables (T1-T8) with Governed Metadata (Singapore Region)"
 );
+
+BEGIN
+  DROP VIEW IF EXISTS `acsm_bronze.m3CIF`;
+EXCEPTION WHEN ERROR THEN
+  SELECT @@error.message;
+END;
+
+BEGIN
+  DROP VIEW IF EXISTS `acsm_bronze.dimProduct`;
+EXCEPTION WHEN ERROR THEN
+  SELECT @@error.message;
+END;
 
 CREATE OR REPLACE TABLE `acsm_bronze.Fact_EP_Judge` (
   `Rcd_DT` DATE OPTIONS(description = "Data extraction date [Source Data Type: date]"),
@@ -198,4 +210,66 @@ CREATE OR REPLACE TABLE `acsm_bronze.Fact_CC_Collection` (
   `Maintain_OSP` FLOAT64 OPTIONS(description = "Maintain amount [Source Data Type: decimal]"),
   `Maintain_Count` INT64 OPTIONS(description = "Maintain count [Source Data Type: decimal]")
 ) OPTIONS(description = "The billing and collection status snapshot for credit cards as at closing period (Governed via Mock Metadata.xlsx | Sheet: T6 - Fact_CC_Collection)");
+
+CREATE OR REPLACE TABLE `acsm_bronze.m3CIF` (
+  `Rcd_DT` DATE OPTIONS(description = "Record refresh date [Source Data Type: date]"),
+  `CIF_ID` INT64 OPTIONS(description = "Customer ID [Source Data Type: varchar]"),
+  `CIF_NM` STRING OPTIONS(description = "Customer name [Source Data Type: varchar]"),
+  `CIF_NM1` STRING OPTIONS(description = "Customer name [Source Data Type: varchar]"),
+  `CIF_NM2` STRING OPTIONS(description = "Customer name [Source Data Type: varchar]"),
+  `MaritalSts` STRING OPTIONS(description = "MaritalStatus [Source Data Type: varchar]"),
+  `Gender` STRING OPTIONS(description = "Gender [Source Data Type: varchar]"),
+  `Citizen` STRING OPTIONS(description = "Citizen [Source Data Type: varchar]"),
+  `State` STRING OPTIONS(description = "State [Source Data Type: varchar]"),
+  `Region` STRING OPTIONS(description = "Region [Source Data Type: varchar]"),
+  `Race` STRING OPTIONS(description = "Race [Source Data Type: varchar]"),
+  `NOB` STRING OPTIONS(description = "Nature of business [Source Data Type: varchar]"),
+  `HomeOwn` STRING OPTIONS(description = "Customer homeowner category [Source Data Type: varchar]"),
+  `HomePost` INT64 OPTIONS(description = "Customer home postcode [Source Data Type: varchar]"),
+  `_HomeAddr1` STRING OPTIONS(description = "_HomeAddr1 [Source Data Type: varchar]"),
+  `_HomeAddr2` STRING OPTIONS(description = "_HomeAddr2 [Source Data Type: varchar]"),
+  `_HomeAddr3` STRING OPTIONS(description = "_HomeAddr3 [Source Data Type: varchar]"),
+  `EmpPost` INT64 OPTIONS(description = "Employment Postal Code [Source Data Type: varchar]"),
+  `MailPost` INT64 OPTIONS(description = "Mail Postal Code [Source Data Type: varchar]"),
+  `Occupation` STRING OPTIONS(description = "Occupation [Source Data Type: varchar]"),
+  `PayslipTyp` INT64 OPTIONS(description = "PayslipTyp [Source Data Type: varchar]"),
+  `Academic` STRING OPTIONS(description = "Academic qualifications [Source Data Type: varchar]"),
+  `Emp_NM` STRING OPTIONS(description = "Employer Name [Source Data Type: varchar]"),
+  `SelftEmp_FG` STRING OPTIONS(description = "Self Employment Indicator [Source Data Type: varchar]"),
+  `Felda_FG` STRING OPTIONS(description = "Felda is a government program to help rural Malaysians. [Source Data Type: varchar]"),
+  `JoinIncome_FG` STRING OPTIONS(description = "Joint Income Indicator [Source Data Type: varchar]"),
+  `RecvPromo_FG` STRING OPTIONS(description = "Received promotion indicator [Source Data Type: varchar]"),
+  `N_Age` INT64 OPTIONS(description = "Age [Source Data Type: numeric]"),
+  `N_YrStay` INT64 OPTIONS(description = "Number of years living in current residence [Source Data Type: numeric]"),
+  `N_YrJob` INT64 OPTIONS(description = "Number of years in current job [Source Data Type: numeric]"),
+  `B_NetIncome` FLOAT64 OPTIONS(description = "Net Income [Source Data Type: numeric]"),
+  `B_GrossIncome` FLOAT64 OPTIONS(description = "Gross Income [Source Data Type: numeric]"),
+  `B_AnnualIncome` FLOAT64 OPTIONS(description = "Annual Income [Source Data Type: numeric]"),
+  `EmpSts` INT64 OPTIONS(description = "Employment Status [Source Data Type: int]")
+) OPTIONS(description = "Customer latest status daily refresh table (Governed via Mock Metadata.xlsx | Sheet: T7 - m3CIF)");
+
+CREATE OR REPLACE TABLE `acsm_bronze.dimProduct` (
+  `Expiry_DT` INT64 OPTIONS(description = "Card expiry date [Source Data Type: varchar]"),
+  `FirstSpend_DT` INT64 OPTIONS(description = "First spend date [Source Data Type: varchar]"),
+  `Block_Code` STRING OPTIONS(description = "If card is blocked [Source Data Type: varchar]"),
+  `Block_Date` INT64 OPTIONS(description = "If card is blocked [Source Data Type: numeric]"),
+  `CIC_Status` STRING OPTIONS(description = "CIC status [Source Data Type: varchar]"),
+  `Card_Status` STRING OPTIONS(description = "Card status [Source Data Type: varchar]"),
+  `AKPK_Status` STRING OPTIONS(description = "AKPK status [Source Data Type: varchar]"),
+  `Card_First_Emboss_Date` INT64 OPTIONS(description = "Physical card issuance date [Source Data Type: numeric]"),
+  `Card_Emboss_Date` INT64 OPTIONS(description = "Card emboss date [Source Data Type: numeric]"),
+  `Card_First_Activated_Date` INT64 OPTIONS(description = "Card first activated date [Source Data Type: numeric]"),
+  `Card_Activated_Date` INT64 OPTIONS(description = "Card current activated date [Source Data Type: numeric]"),
+  `CP_CL` FLOAT64 OPTIONS(description = "Credit Purchase Total Limit [Source Data Type: numeric]"),
+  `CP_CL_Available` FLOAT64 OPTIONS(description = "Credit Purchase Available Limit [Source Data Type: numeric]"),
+  `CA_CL` FLOAT64 OPTIONS(description = "Credit Advance Total Limit [Source Data Type: numeric]"),
+  `CA_CL_Available` FLOAT64 OPTIONS(description = "Credit Advance Available Limit [Source Data Type: numeric]"),
+  `CP_CL_Usage` FLOAT64 OPTIONS(description = "Credit Purchase Usage [Source Data Type: numeric]"),
+  `CA_CL_Usage` FLOAT64 OPTIONS(description = "Credit Advance Usage [Source Data Type: numeric]"),
+  `CIF_ID` INT64 OPTIONS(description = "Unique customer ID [Source Data Type: varchar]"),
+  `Account_No` INT64 OPTIONS(description = "Card account number [Source Data Type: numeric]"),
+  `Account_Agree_Sts` STRING OPTIONS(description = "Account agreement status [Source Data Type: varchar]"),
+  `Virtual_Card_Flag` STRING OPTIONS(description = "Virtual card indicator [Source Data Type: varchar]"),
+  `Wallet_Tier` STRING OPTIONS(description = "Loyalty account Tier [Source Data Type: varchar]")
+) OPTIONS(description = "The current and daily full refresh master record of all active cards (Governed via Mock Metadata.xlsx | Sheet: T8 - dimProduct)");
 
