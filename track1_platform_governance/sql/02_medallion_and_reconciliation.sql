@@ -5,7 +5,7 @@
 -- Demonstrates:
 -- 1. Creation of Silver (`acsm_silver`) & Gold (`acsm_gold`) Medallion Datasets in Singapore (`asia-southeast1`)
 -- 2. Silver Layer Standardization (`silver_customer_cif`, `silver_ep_underwriting`, `silver_cc_underwriting`, `silver_collections_summary`)
--- 3. Gold Layer AEON 360 Customer Profile (`gold_aeon360_customer_profile`)
+-- 3. Gold Layer AEON 360 Customer Profile (`gold_aeon_customer360_profile`)
 -- 4. Dual-Run Automated Row & Financial Reconciliation Audit (`recon_audit_log`)
 -- =============================================================================
 
@@ -142,9 +142,9 @@ FULL OUTER JOIN cc_col cc
   ON ep.CIF_ID = cc.CIF_ID;
 
 -- -----------------------------------------------------------------------------
--- 5. Gold AEON 360 Customer Profile (`acsm_gold.gold_aeon360_customer_profile`)
+-- 5. Gold AEON 360 Customer Profile (`acsm_gold.gold_aeon_customer360_profile`)
 -- -----------------------------------------------------------------------------
-CREATE OR REPLACE TABLE `acsm_gold.gold_aeon360_customer_profile`
+CREATE OR REPLACE TABLE `acsm_gold.gold_aeon_customer360_profile`
 CLUSTER BY State, CIF_ID
 OPTIONS (
   description = 'Gold AEON 360 Customer Risk, Affordability & Credit Exposure Feature Store joining CIF, EP Underwriting, CC Underwriting, Collections, and Card Utilization.'
@@ -223,7 +223,7 @@ SELECT
   Region,
   Occupation,
   IF(COALESCE(combined_unpaid_osp, 0) > 0, 1, 0) AS delinquency_risk_flag
-FROM `acsm_gold.gold_aeon360_customer_profile`;
+FROM `acsm_gold.gold_aeon_customer360_profile`;
 
 -- -----------------------------------------------------------------------------
 -- 7. Gold Batch BQML Predictions (`acsm_gold.gold_aeon360_batch_ml_predictions`)
@@ -237,7 +237,7 @@ SELECT
   *
 FROM ML.PREDICT(
   MODEL `acsm_silver.model_delinquency_propensity`,
-  TABLE `acsm_gold.gold_aeon360_customer_profile`
+  TABLE `acsm_gold.gold_aeon_customer360_profile`
 );
 
 -- -----------------------------------------------------------------------------
