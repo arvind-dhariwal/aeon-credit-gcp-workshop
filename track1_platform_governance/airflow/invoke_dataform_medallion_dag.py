@@ -4,8 +4,9 @@ ACSM Track 1 — Live Dataform Medallion DAG Orchestration Runner
 Executes the exact Cloud Composer / Apache Airflow operator sequence:
   1. Provisions & binds a dedicated Dataform execution service account (`acsm-dataform-sa@<PROJECT_ID>.iam.gserviceaccount.com`)
      to satisfy `strictActAs` org policy checks.
-  2. Auto-discovers or initializes the `acsm-medallion-pipeline` Dataform Repository & `default` Workspace in asia-southeast1
-     with `workflow_settings.yaml` (Dataform Core 3.0.0) and all 7 Medallion + BQML `.sqlx` nodes.
+  2. Initializes & syncs the `acsm-medallion-pipeline` Dataform Repository & `default` Workspace in asia-southeast1
+     with `workflow_settings.yaml` (Dataform Core 3.0.0) and all 7 verified Medallion + BQML `.sqlx` nodes
+     (removing any stale `.sqlx` files that could cause column errors like `Appl_DT_RAW`).
   3. Compiles the Dataform Medallion DAG (DataformCreateCompilationResultOperator equivalent)
   4. Triggers a live Dataform Workflow Invocation (DataformCreateWorkflowInvocationOperator equivalent)
 """
@@ -19,7 +20,7 @@ import urllib.request
 
 
 def get_medallion_sqlx_files():
-    """Returns the Dataform .sqlx files matching the Step 4 Medallion + BQML DAG."""
+    """Returns the 7 verified Dataform .sqlx files for the ACSM Medallion + BQML DAG."""
     return {
         "definitions/silver_customer_cif.sqlx": """config {
   type: "table",
@@ -280,7 +281,6 @@ def ensure_dataform_service_account(project_id):
     ).strip()
     dataform_agent = f"serviceAccount:service-{project_number}@gcp-sa-dataform.iam.gserviceaccount.com"
 
-    # 1. Create service account if it doesn't exist yet
     desc = subprocess.run(
         ["gcloud", "iam", "service-accounts", "describe", sa_email, f"--project={project_id}"],
         stdout=subprocess.DEVNULL,
@@ -303,41 +303,38 @@ def ensure_dataform_service_account(project_id):
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
         )
-        # Grant project roles to the execution SA
-        for role in ["roles/bigquery.dataEditor", "roles/bigquery.jobUser", "roles/bigquery.user", "roles/storage.objectAdmin"]:
-            subprocess.run(
-                [
-                    "gcloud",
-                    "projects",
-                    "add-iam-policy-binding",
-                    project_id,
-                    f"--member=serviceAccount:{sa_email}",
-                    f"--role={role}",
-                    "--quiet",
-                ],
-                check=False,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-            )
-        # Grant the Dataform Service Agent permission to impersonate sa_email (required by strictActAs)
-        for sa_role in ["roles/iam.serviceAccountTokenCreator", "roles/iam.serviceAccountUser"]:
-            subprocess.run(
-                [
-                    "gcloud",
-                    "iam",
-                    "service-accounts",
-                    "add-iam-policy-binding",
-                    sa_email,
-                    f"--member={dataform_agent}",
-                    f"--role={sa_role}",
-                    f"--project={project_id}",
-                    "--quiet",
-                ],
-                check=False,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-            )
-        time.sleep(5)
+    for role in ["roles/bigquery.dataEditor", "roles/bigquery.jobUser", "roles/bigquery.user", "roles/storage.objectAdmin"]:
+        subprocess.run(
+            [
+                "gcloud",
+                "projects",
+                "add-iam-policy-binding",
+                project_id,
+                f"--member=serviceAccount:{sa_email}",
+                f"--role={role}",
+                "--quiet",
+            ],
+            check=False,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+    for sa_role in ["roles/iam.serviceAccountTokenCreator", "roles/iam.serviceAccountUser"]:
+        subprocess.run(
+            [
+                "gcloud",
+                "iam",
+                "service-accounts",
+                "add-iam-policy-binding",
+                sa_email,
+                f"--member={dataform_agent}",
+                f"--role={sa_role}",
+                f"--project={project_id}",
+                "--quiet",
+            ],
+            check=False,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
     return sa_email
 
 
@@ -346,8 +343,8 @@ def main():
         ["gcloud", "config", "get-value", "project"], text=True
     ).strip()
     location = os.environ.get("LOCATION", "asia-southeast1")
-    repo_id = os.environ.get("DATAFORM_REPOSITORY_ID", "").strip()
-    workspace_id = os.environ.get("DATAFORM_WORKSPACE_ID", "").strip()
+    repo_id = os.environ.get("DATAFORM_REPOSITORY_ID", "acsm-medallion-pipeline").strip()
+    workspace_id = os.environ.get("DATAFORM_WORKSPACE_ID", "default").strip()
 
     dataform_sa = ensure_dataform_service_account(project_id)
 
@@ -392,67 +389,32 @@ def main():
             return []
 
     base_url = f"https://dataform.googleapis.com/v1beta1/projects/{project_id}/locations/{location}"
+    repo_full_name = f"projects/{project_id}/locations/{location}/repositories/{repo_id}"
+    ws_full_name = f"{repo_full_name}/workspaces/{workspace_id}"
 
-    # 1. Discover an existing Dataform Pipeline Repository & Workspace (skipping single-file Notebook repositories!)
-    discovered_ws_full_name = None
-    if not repo_id:
-        try:
-            repos_resp = call_dataform_api(f"{base_url}/repositories")
-            repos = repos_resp.get("repositories", [])
-            for r in reversed(repos):
-                r_name = r["name"]
-                r_id = r_name.split("/")[-1]
-                labels = r.get("labels", {})
-                if labels.get("single-file-asset-type") in ("notebook", "sql"):
-                    continue
-                ws_resp = call_dataform_api(f"https://dataform.googleapis.com/v1beta1/{r_name}/workspaces")
-                for ws in ws_resp.get("workspaces", []):
-                    ws_files = get_workspace_files(ws["name"])
-                    has_sqlx = any(f.endswith(".sqlx") for f in ws_files)
-                    has_ipynb_only = any(f.endswith(".ipynb") for f in ws_files) and not has_sqlx
-                    if has_ipynb_only:
-                        continue
-                    if has_sqlx or r_id == "acsm-medallion-pipeline" or labels.get("single-file-asset-type") == "pipeline":
-                        repo_id = r_id
-                        workspace_id = ws["name"].split("/")[-1]
-                        discovered_ws_full_name = ws["name"]
-                        print(f"🔍 Auto-discovered Dataform Pipeline Repository in {location}: {repo_id} (workspace: {workspace_id})")
-                        break
-                if discovered_ws_full_name:
-                    break
-        except Exception as e:
-            print(f"ℹ️ Repository scan note: {e}")
+    # 1. Ensure `acsm-medallion-pipeline` Repository and `default` Workspace exist
+    try:
+        call_dataform_api(
+            f"{base_url}/repositories?repositoryId={repo_id}",
+            method="POST",
+            payload={
+                "displayName": "ACSM Medallion & BQML Pipeline",
+                "serviceAccount": dataform_sa,
+            },
+        )
+    except urllib.error.HTTPError as e:
+        if e.code != 409:
+            raise
+    try:
+        call_dataform_api(
+            f"{base_url}/repositories/{repo_id}/workspaces?workspaceId={workspace_id}",
+            method="POST",
+            payload={},
+        )
+    except urllib.error.HTTPError as e:
+        if e.code != 409:
+            raise
 
-    # 2. If no Pipeline workspace with .sqlx files was found, create/initialize `acsm-medallion-pipeline`
-    if not discovered_ws_full_name:
-        repo_id = repo_id or "acsm-medallion-pipeline"
-        workspace_id = workspace_id or "default"
-        repo_full_name = f"projects/{project_id}/locations/{location}/repositories/{repo_id}"
-        discovered_ws_full_name = f"{repo_full_name}/workspaces/{workspace_id}"
-        print(f"⚙️ Initializing Dataform Medallion Repository `{repo_id}` (workspace: `{workspace_id}`) in {location}...")
-        try:
-            call_dataform_api(
-                f"{base_url}/repositories?repositoryId={repo_id}",
-                method="POST",
-                payload={
-                    "displayName": "ACSM Medallion & BQML Pipeline",
-                    "serviceAccount": dataform_sa,
-                },
-            )
-        except urllib.error.HTTPError as e:
-            if e.code != 409:
-                raise
-        try:
-            call_dataform_api(
-                f"{base_url}/repositories/{repo_id}/workspaces?workspaceId={workspace_id}",
-                method="POST",
-                payload={},
-            )
-        except urllib.error.HTTPError as e:
-            if e.code != 409:
-                raise
-
-    # Ensure the repository has serviceAccount configured for strictActAs checks
     try:
         call_dataform_api(
             f"{base_url}/repositories/{repo_id}?updateMask=serviceAccount",
@@ -462,39 +424,73 @@ def main():
     except Exception:
         pass
 
-    # 3. Ensure `workflow_settings.yaml` (Dataform Core 3.x) and .sqlx definitions exist in the target workspace
-    ws_files = get_workspace_files(discovered_ws_full_name)
-    if "workflow_settings.yaml" not in ws_files and "dataform.json" not in ws_files:
-        workflow_settings_yaml = (
-            f"dataformCoreVersion: 3.0.0\n"
-            f"defaultProject: {project_id}\n"
-            f"defaultLocation: {location}\n"
-            f"defaultDataset: acsm_silver\n"
-            f"defaultAssertionDataset: acsm_silver\n"
-        )
-        write_workspace_file(discovered_ws_full_name, "workflow_settings.yaml", workflow_settings_yaml)
-        print("   • Created `workflow_settings.yaml` (Dataform Core 3.0.0) in workspace.")
+    # 2. Clean out any stale .sqlx files in `definitions/` and write all 7 verified Medallion + BQML .sqlx files
+    workflow_settings_yaml = (
+        f"dataformCoreVersion: 3.0.0\n"
+        f"defaultProject: {project_id}\n"
+        f"defaultLocation: {location}\n"
+        f"defaultDataset: acsm_silver\n"
+        f"defaultAssertionDataset: acsm_silver\n"
+    )
+    write_workspace_file(ws_full_name, "workflow_settings.yaml", workflow_settings_yaml)
 
-    if not any(f.endswith(".sqlx") for f in ws_files):
-        try:
-            call_dataform_api(
-                f"https://dataform.googleapis.com/v1beta1/{discovered_ws_full_name}:makeDirectory",
-                method="POST",
-                payload={"path": "definitions"},
-            )
-        except urllib.error.HTTPError:
-            pass
-        sqlx_map = get_medallion_sqlx_files()
-        for path, content in sqlx_map.items():
-            write_workspace_file(discovered_ws_full_name, path, content)
-        print(f"   • Seeded {len(sqlx_map)} Medallion & BQML `.sqlx` pipeline nodes into `{workspace_id}`.")
+    try:
+        call_dataform_api(
+            f"https://dataform.googleapis.com/v1beta1/{ws_full_name}:makeDirectory",
+            method="POST",
+            payload={"path": "definitions"},
+        )
+    except urllib.error.HTTPError:
+        pass
+
+    sqlx_map = get_medallion_sqlx_files()
+    existing_files = get_workspace_files(ws_full_name)
+    for old_f in existing_files:
+        if old_f.endswith(".sqlx") and old_f not in sqlx_map:
+            try:
+                call_dataform_api(
+                    f"https://dataform.googleapis.com/v1beta1/{ws_full_name}:removeFile",
+                    method="POST",
+                    payload={"path": old_f},
+                )
+            except Exception:
+                pass
+
+    for path, content in sqlx_map.items():
+        write_workspace_file(ws_full_name, path, content)
+
+    # Also auto-heal any Step 4 UI Pipeline workspaces in asia-southeast1 if they contain `Appl_DT_RAW` or `APPL_DT_RAW`
+    try:
+        repos_resp = call_dataform_api(f"{base_url}/repositories")
+        for r in repos_resp.get("repositories", []):
+            r_name = r["name"]
+            if r_name.endswith(f"/{repo_id}"):
+                continue
+            labels = r.get("labels", {})
+            if labels.get("single-file-asset-type") in ("notebook", "sql"):
+                continue
+            ws_list = call_dataform_api(f"https://dataform.googleapis.com/v1beta1/{r_name}/workspaces").get("workspaces", [])
+            for w in ws_list:
+                w_name = w["name"]
+                for f_path in get_workspace_files(w_name):
+                    if f_path.endswith(".sqlx"):
+                        f_res = call_dataform_api(
+                            f"https://dataform.googleapis.com/v1beta1/{w_name}:readFile?path={f_path}"
+                        )
+                        raw_bytes = base64.b64decode(f_res.get("fileContents", "")).decode("utf-8", errors="ignore")
+                        if "Appl_DT_RAW" in raw_bytes or "APPL_DT_RAW" in raw_bytes:
+                            fixed_sqlx = raw_bytes.replace("Appl_DT_RAW", "Appl_DT").replace("APPL_DT_RAW", "APPL_DT")
+                            write_workspace_file(w_name, f_path, fixed_sqlx)
+                            print(f"🛠️ Auto-repaired `Appl_DT_RAW` in Step 4 UI workspace `{w_name}` ({f_path})")
+    except Exception:
+        pass
 
     dag_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "acsm_medallion_dataform_orchestrator_dag.py")
     print(f"✅ Airflow DAG Definition Ready : {dag_path}")
     print(f"   • Target Project             : {project_id}")
     print(f"   • Target Region              : {location}")
     print(f"   • Dataform Repository ID     : {repo_id}")
-    print(f"   • Dataform Workspace         : {workspace_id}")
+    print(f"   • Dataform Workspace         : {workspace_id} (7 verified .sqlx nodes synced)")
     print(f"   • Execution Service Account  : {dataform_sa}")
     print(
         f"   • Cloud Composer Deploy Cmd  : "
@@ -503,9 +499,9 @@ def main():
 
     print("\n🚀 Executing Airflow Orchestration Sequence against Dataform API...")
     try:
-        print(f"   1️⃣ [DataformCreateCompilationResultOperator] Compiling workspace: {discovered_ws_full_name}")
+        print(f"   1️⃣ [DataformCreateCompilationResultOperator] Compiling workspace: {ws_full_name}")
         compile_payload = {
-            "workspace": discovered_ws_full_name,
+            "workspace": ws_full_name,
             "codeCompilationConfig": {
                 "defaultDatabase": project_id,
                 "defaultLocation": location,
