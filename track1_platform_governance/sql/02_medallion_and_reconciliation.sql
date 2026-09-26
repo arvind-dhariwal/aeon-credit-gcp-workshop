@@ -21,6 +21,18 @@ OPTIONS (
   description = 'ACSM Gold Medallion Layer: Unified AEON 360 Customer Risk, Affordability & Credit Exposure Feature Store in Singapore (asia-southeast1)'
 );
 
+CREATE SCHEMA IF NOT EXISTS `dataform`
+OPTIONS (
+  location = 'asia-southeast1',
+  description = 'Default Dataform working dataset in Singapore (asia-southeast1)'
+);
+
+CREATE SCHEMA IF NOT EXISTS `dataform_assertions`
+OPTIONS (
+  location = 'asia-southeast1',
+  description = 'Default Dataform assertion views & test results dataset in Singapore (asia-southeast1)'
+);
+
 -- -----------------------------------------------------------------------------
 -- 1. Silver Conformed Customer Master (`m3CIF` -> `acsm_silver.silver_customer_cif`)
 -- -----------------------------------------------------------------------------
