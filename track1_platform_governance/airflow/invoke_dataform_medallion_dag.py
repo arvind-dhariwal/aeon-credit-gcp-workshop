@@ -442,8 +442,8 @@ def main():
         inv_payload = {
             "compilationResult": comp_name,
             "invocationConfig": {
-                "includeDependencies": True,
-                "includeDependents": True,
+                "transitiveDependenciesIncluded": True,
+                "transitiveDependentsIncluded": True,
                 "fullyRefreshIncrementalTablesEnabled": False,
             },
         }

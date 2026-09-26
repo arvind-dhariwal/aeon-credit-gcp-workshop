@@ -93,8 +93,8 @@ with DAG(
         workflow_invocation={
             "compilation_result": "{{ task_instance.xcom_pull('compile_dataform_medallion_repo')['name'] }}",
             "invocation_config": {
-                "include_dependencies": True,
-                "include_dependents": True,
+                "transitive_dependencies_included": True,
+                "transitive_dependents_included": True,
                 "fully_refresh_incremental_tables_enabled": False,
             },
         },
