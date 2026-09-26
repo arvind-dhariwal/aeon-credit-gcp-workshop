@@ -478,10 +478,13 @@ def main():
                             f"https://dataform.googleapis.com/v1beta1/{w_name}:readFile?path={f_path}"
                         )
                         raw_bytes = base64.b64decode(f_res.get("fileContents", "")).decode("utf-8", errors="ignore")
-                        if "Appl_DT_RAW" in raw_bytes or "APPL_DT_RAW" in raw_bytes:
-                            fixed_sqlx = raw_bytes.replace("Appl_DT_RAW", "Appl_DT").replace("APPL_DT_RAW", "APPL_DT")
-                            write_workspace_file(w_name, f_path, fixed_sqlx)
-                            print(f"🛠️ Auto-repaired `Appl_DT_RAW` in Step 4 UI workspace `{w_name}` ({f_path})")
+                        if any(tok in raw_bytes for tok in ("Appl_DT_RAW", "APPL_DT_RAW", "Rcd_DT_RAW")):
+                            import re
+                            # In WHERE / AND clauses, replace the SELECT alias (<col>_RAW) on the left-hand side with the actual source column (<col>)
+                            fixed_sqlx = re.sub(r"\b(WHERE|AND)\s+([A-Za-z_]+)_RAW\b", r"\1 \2", raw_bytes)
+                            if fixed_sqlx != raw_bytes:
+                                write_workspace_file(w_name, f_path, fixed_sqlx)
+                                print(f"🛠️ Auto-repaired incremental WHERE `<col>_RAW` alias in Step 4 UI workspace `{w_name}` ({f_path})")
     except Exception:
         pass
 
