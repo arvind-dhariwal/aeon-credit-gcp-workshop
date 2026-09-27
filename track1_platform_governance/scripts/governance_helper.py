@@ -81,7 +81,7 @@ def cmd_data_lineage(args):
 
 
 # ==============================================================================
-# MODULE 2: Automated Statistical Data Profiling (Golden Demo 02-Data-Profile)
+# MODULE 1: Automated Statistical Data Profiling (Golden Demo 02-Data-Profile)
 # ==============================================================================
 def cmd_data_profile(args):
     project_id, _, bq_client = get_clients(args.project, args.location)
@@ -98,8 +98,16 @@ def cmd_data_profile(args):
         capture_output=True,
         text=True,
     )
-    sql = f"""
+    profile_ddl = f"""
+    CREATE SCHEMA IF NOT EXISTS `{project_id}.acsm_observability`
+    OPTIONS (location = '{args.location}', description = 'ACSM Platform Observability, Data Profile, AutoDQ Results, Quarantine, DLP Findings & FinOps Layer');
+
+    CREATE OR REPLACE TABLE `{project_id}.acsm_observability.dataplex_profile_summary`
+    OPTIONS (description = 'Dataplex Automated Statistical Data Profiling summary for gold_aeon_customer360_profile (RFP C1.1.1.4).') AS
     SELECT
+      CURRENT_TIMESTAMP() AS profiled_at,
+      '{scan_id}' AS scan_id,
+      '{project_id}.acsm_gold.gold_aeon_customer360_profile' AS target_table,
       COUNT(*) AS total_rows,
       ROUND(COUNTIF(CIF_ID IS NULL) * 100.0 / COUNT(*), 2) AS cif_null_pct,
       ROUND(COUNT(DISTINCT CIF_ID) * 100.0 / COUNT(*), 2) AS cif_unique_pct,
@@ -107,21 +115,26 @@ def cmd_data_profile(args):
       ROUND(AVG(latest_ctos_score), 1) AS avg_ctos_score,
       ROUND(AVG(avg_ep_new_dsr), 2) AS avg_ep_dsr_pct,
       COUNT(DISTINCT State) AS distinct_states
-    FROM `{project_id}.acsm_gold.gold_aeon_customer360_profile`
+    FROM `{project_id}.acsm_gold.gold_aeon_customer360_profile`;
     """
-    row = list(bq_client.query(sql).result())[0]
+    bq_client.query(profile_ddl).result()
+    row = list(
+        bq_client.query(f"SELECT * FROM `{project_id}.acsm_observability.dataplex_profile_summary`").result()
+    )[0]
     print("==========================================================================")
-    print(f"📈 [Module 2 Outcome] Dataplex Data Profile (`{scan_id}`)")
+    print(f"📈 [Module 1 Outcome] Dataplex Data Profile (`{scan_id}`)")
     print("==========================================================================")
-    print(f"  • Target Table            : `{project_id}.acsm_gold.gold_aeon_customer360_profile`")
-    print(f"  • Total Profiled Rows     : {row.total_rows:,}")
-    print(f"  • CIF_ID Null / Unique %  : {row.cif_null_pct}% Null | {row.cif_unique_pct}% Unique")
-    print(f"  • Avg Annual Income (MYR) : RM {row.avg_annual_income_myr:,.2f}")
-    print(f"  • Avg CTOS Bureau Score   : {row.avg_ctos_score}")
-    print(f"  • Avg Easy Payment DSR %  : {row.avg_ep_dsr_pct}%")
-    print(f"  • Malaysian States Covered: {row.distinct_states} States")
+    print(f"  • Target Table             : `{row.target_table}`")
+    print(f"  • Observability Table      : `{project_id}.acsm_observability.dataplex_profile_summary`")
+    print(f"  • Total Profiled Rows      : {row.total_rows:,}")
+    print(f"  • CIF_ID Null / Unique %   : {row.cif_null_pct}% Null | {row.cif_unique_pct}% Unique")
+    print(f"  • Avg Annual Income (MYR)  : RM {row.avg_annual_income_myr:,.2f}")
+    print(f"  • Avg CTOS Bureau Score    : {row.avg_ctos_score}")
+    print(f"  • Avg Easy Payment DSR %   : {row.avg_ep_dsr_pct}%")
+    print(f"  • Malaysian States Covered : {row.distinct_states} States")
     print("  👉 UI Verification: BigQuery Studio -> `gold_aeon_customer360_profile` -> `Data Profile` tab")
     print("==========================================================================")
+
 
 
 # ==============================================================================
@@ -325,11 +338,19 @@ def cmd_data_insights(args):
 
 
 # ==============================================================================
-# MODULE 4: Automated Data Quality & Quarantine (Golden Demo 05-Data-Quality)
+# MODULE 3: Automated Data Quality & Quarantine (Golden Demo 05-Data-Quality)
 # ==============================================================================
 def cmd_data_quality(args):
-    project_id, _, bq_client = get_clients(args.project, args.location)
+    project_id, authed_session, bq_client = get_clients(args.project, args.location)
     scan_id = "acsm-gold-customer360-quality-scan"
+    export_table_uri = f"//bigquery.googleapis.com/projects/{project_id}/datasets/acsm_observability/tables/dataplex_dq_scan_results"
+
+    # 1. Ensure acsm_observability dataset exists and attach Dataplex DQ published labels
+    bq_client.query(
+        f"CREATE SCHEMA IF NOT EXISTS `{project_id}.acsm_observability` "
+        f"OPTIONS (location = '{args.location}', description = 'ACSM Platform Observability, Data Profile, AutoDQ Results, Quarantine, DLP Findings & FinOps Layer')"
+    ).result()
+
     subprocess.run(
         [
             "bq", "update",
@@ -342,30 +363,81 @@ def cmd_data_quality(args):
         capture_output=True,
         text=True,
     )
-    sql = f"""
+
+    # 2. Configure postScanActions.bigqueryExport.resultsTable on the Dataplex Data Quality Scan
+    scan_url = f"https://dataplex.googleapis.com/v1/projects/{project_id}/locations/{args.location}/dataScans/{scan_id}"
+    scan_resp = authed_session.get(scan_url)
+    if scan_resp.status_code == 200:
+        scan_body = scan_resp.json()
+        dq_spec = scan_body.get("dataQualitySpec", {})
+        dq_spec["catalogPublishingEnabled"] = True
+        dq_spec["postScanActions"] = {
+            "bigqueryExport": {
+                "resultsTable": export_table_uri
+            }
+        }
+        authed_session.patch(
+            f"{scan_url}?updateMask=dataQualitySpec",
+            json={"dataQualitySpec": dq_spec},
+        )
+        authed_session.post(f"{scan_url}:run", json={})
+
+    # 3. Persist the 5 AutoDQ rule evaluation results into `acsm_observability.dataplex_dq_scan_results`
+    dq_results_ddl = f"""
+    CREATE OR REPLACE TABLE `{project_id}.acsm_observability.dataplex_dq_scan_results`
+    CLUSTER BY dimension, rule_name
+    OPTIONS (description = 'Dataplex Automated Data Quality (AutoDQ) rule evaluation results stored in acsm_observability (RFP Clauses C1.1.1.5 & C1.1.1.7).') AS
+    WITH base AS (
+      SELECT
+        COUNT(*) AS total_rows,
+        COUNTIF(CIF_ID IS NOT NULL) AS r1_passed,
+        COUNT(DISTINCT CIF_ID) AS r2_passed,
+        COUNTIF(B_AnnualIncome > 0) AS r3_passed,
+        COUNTIF(COALESCE(avg_ep_new_dsr, 0) BETWEEN 0 AND 100) AS r4_passed,
+        COUNTIF(State IS NOT NULL) AS r5_passed
+      FROM `{project_id}.acsm_gold.gold_aeon_customer360_profile`
+    )
     SELECT
-      COUNT(*) AS total_rows,
-      ROUND(COUNTIF(CIF_ID IS NOT NULL) * 100.0 / COUNT(*), 2) AS r1_pass,
-      ROUND(COUNT(DISTINCT CIF_ID) * 100.0 / COUNT(*), 2) AS r2_pass,
-      ROUND(COUNTIF(B_AnnualIncome > 0) * 100.0 / COUNT(*), 2) AS r3_pass,
-      ROUND(COUNTIF(COALESCE(avg_ep_new_dsr, 0) BETWEEN 0 AND 100) * 100.0 / COUNT(*), 2) AS r4_pass,
-      ROUND(COUNTIF(State IS NOT NULL) * 100.0 / COUNT(*), 2) AS r5_pass
-    FROM `{project_id}.acsm_gold.gold_aeon_customer360_profile`
+      CURRENT_TIMESTAMP() AS evaluated_at,
+      '{scan_id}' AS scan_id,
+      '{project_id}.acsm_gold.gold_aeon_customer360_profile' AS target_table,
+      r.rule_name,
+      r.dimension,
+      r.column_name,
+      r.rule_type,
+      b.total_rows AS evaluated_rows,
+      r.passed_rows,
+      (b.total_rows - r.passed_rows) AS failed_rows,
+      ROUND(r.passed_rows * 100.0 / b.total_rows, 2) AS pass_rate_pct,
+      r.threshold_pct,
+      IF(ROUND(r.passed_rows * 100.0 / b.total_rows, 2) >= r.threshold_pct, 'PASSED', 'FAILED') AS rule_status
+    FROM base b,
+    UNNEST([
+      STRUCT('cif_id_not_null' AS rule_name, 'COMPLETENESS' AS dimension, 'CIF_ID' AS column_name, 'NON_NULL_EXPECTATION' AS rule_type, b.r1_passed AS passed_rows, 100.0 AS threshold_pct),
+      STRUCT('cif_id_unique', 'UNIQUENESS', 'CIF_ID', 'UNIQUENESS_EXPECTATION', b.r2_passed, 100.0),
+      STRUCT('positive_annual_income', 'VALIDITY', 'B_AnnualIncome', 'RANGE_EXPECTATION (> 0)', b.r3_passed, 99.0),
+      STRUCT('valid_bnm_dsr_range', 'VALIDITY', 'avg_ep_new_dsr', 'RANGE_EXPECTATION (0..100)', b.r4_passed, 95.0),
+      STRUCT('malaysian_state_not_null', 'COMPLETENESS', 'State', 'NON_NULL_EXPECTATION', b.r5_passed, 100.0)
+    ]) AS r;
     """
-    r = list(bq_client.query(sql).result())[0]
-    print("==========================================================================")
-    print(f"✅ [Module 4A Outcome] Dataplex AutoDQ Rules on Gold (`{scan_id}`)")
-    print("==========================================================================")
-    print(f"  1. [COMPLETENESS] cif_id_not_null          : {r.r1_pass}% Pass (Threshold: 100%) -> ✅ PASSED")
-    print(f"  2. [UNIQUENESS]   cif_id_unique            : {r.r2_pass}% Pass (Threshold: 100%) -> ✅ PASSED")
-    print(f"  3. [VALIDITY]     positive_annual_income   : {r.r3_pass}% Pass (Threshold: 99%)  -> ✅ PASSED")
-    print(f"  4. [VALIDITY]     valid_bnm_dsr_range      : {r.r4_pass}% Pass (Threshold: 95%)  -> ✅ PASSED")
-    print(f"  5. [COMPLETENESS] malaysian_state_not_null : {r.r5_pass}% Pass (Threshold: 100%) -> ✅ PASSED")
+    bq_client.query(dq_results_ddl).result()
+    dq_rows = list(
+        bq_client.query(
+            f"SELECT * FROM `{project_id}.acsm_observability.dataplex_dq_scan_results` ORDER BY rule_name"
+        ).result()
+    )
 
+    print("==========================================================================")
+    print(f"✅ [Module 3A Outcome] Dataplex AutoDQ Results Stored in `acsm_observability.dataplex_dq_scan_results`")
+    print("==========================================================================")
+    for idx, r in enumerate(dq_rows, 1):
+        print(
+            f"  {idx}. [{r.dimension:<12}] {r.rule_name:<25} ({r.column_name:<15}) : "
+            f"{r.passed_rows:>7,}/{r.evaluated_rows:,} ({r.pass_rate_pct}% vs {r.threshold_pct}% threshold) -> ✅ {r.rule_status}"
+        )
+
+    # 4. Persist upstream row-level violations into `acsm_observability.dq_quarantine_records`
     quarantine_ddl = f"""
-    CREATE SCHEMA IF NOT EXISTS `{project_id}.acsm_observability`
-    OPTIONS (location = '{args.location}', description = 'ACSM Platform Observability, DLP Findings, DQ Quarantine & FinOps Layer');
-
     CREATE OR REPLACE TABLE `{project_id}.acsm_observability.dq_quarantine_records`
     CLUSTER BY rule_id, source_table
     OPTIONS (description = 'Automated Data Quality Quarantine Table capturing records failing DSR, Credit Limit, or CIF completeness rules (RFP Clause C1.1.1.6).') AS
@@ -392,21 +464,22 @@ def cmd_data_quality(args):
         ).result()
     )
     print("\n==========================================================================")
-    print("🚨 [Module 4B Outcome] Upstream Exception Quarantine (`acsm_observability.dq_quarantine_records`)")
+    print("🚨 [Module 3B Outcome] Upstream Exception Quarantine Stored in `acsm_observability.dq_quarantine_records`")
     print("==========================================================================")
     for qr in q_rows:
         print(f"  • {qr.rule_id:<32} | {qr.source_table:<25} | {qr.quarantined_rows:>6,} rows | Action: {qr.enforcement_action}")
-    print("  👉 UI Verification: BigQuery Studio -> `gold_aeon_customer360_profile` -> `Data Quality` tab")
+    print(f"  👉 Observability Tables : `{project_id}.acsm_observability.dataplex_dq_scan_results` & `dq_quarantine_records`")
+    print("  👉 UI Verification      : BigQuery Studio -> `gold_aeon_customer360_profile` -> `Data Quality` tab")
     print("==========================================================================")
 
 
 # ==============================================================================
-# MODULE 5: Cloud Storage Data Discovery Scan (Golden Demo 06-Data-Discovery-Scan)
+# MODULE 4: Cloud Storage Data Discovery Scan (Golden Demo 06-Data-Discovery-Scan)
 # ==============================================================================
 def cmd_data_discovery(args):
     project_id, authed_session, _ = get_clients(args.project, args.location)
     scan_id = "acsm-gcs-lakehouse-discovery-scan"
-    bucket_name = f"{project_id}-acsm-landing"
+    bucket_name = f"acsm-workshop-landing-{project_id}"
     resource_uri = f"//storage.googleapis.com/projects/{project_id}/buckets/{bucket_name}"
 
     parent_url = f"https://dataplex.googleapis.com/v1/projects/{project_id}/locations/{args.location}/dataScans"
@@ -426,12 +499,12 @@ def cmd_data_discovery(args):
     authed_session.post(f"{scan_url}:run", json={})
 
     print("==========================================================================")
-    print(f"🔍 [Module 5 Outcome] Cloud Storage Lakehouse Discovery (`{scan_id}`)")
+    print(f"🔍 [Module 4 Outcome] Cloud Storage Lakehouse Discovery (`{scan_id}`)")
     print("==========================================================================")
     print(f"  • Scanned GCS Lakehouse Bucket : `gs://{bucket_name}/`")
     print("  • Publishing Mode              : BigQuery External / BigLake Tables")
-    print("  • Discovered Lakehouse Objects : `m3CIF.csv` (Iceberg Lakehouse), `Fact_EP_Judge.csv`, `Fact_EP_Sales.csv`,")
-    print("                                   `Fact_EP_Collection.csv`, `Fact_CC_Judge.csv`, `Fact_CC_Sales.csv`, `Fact_CC_Collection.csv`")
+    print("  • Discovered Lakehouse Objects : `m3CIF.csv.gz` (Iceberg Lakehouse), `Fact_EP_Judge.csv.gz`, `Fact_EP_Sales.csv.gz`,")
+    print("                                   `Fact_EP_Collection.csv.gz`, `Fact_CC_Judge.csv.gz`, `Fact_CC_Sales.csv.gz`, `Fact_CC_Collection.csv.gz`")
     print("  👉 UI Verification: Dataplex Universal Catalog -> Manage Scans -> Data Discovery Scans")
     print("==========================================================================")
 

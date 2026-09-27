@@ -1,3 +1,4 @@
+catalogPublishingEnabled: true
 rules:
   - column: CIF_ID
     dimension: COMPLETENESS
