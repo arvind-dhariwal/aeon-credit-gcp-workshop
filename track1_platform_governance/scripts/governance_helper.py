@@ -122,7 +122,7 @@ def cmd_data_profile(args):
         bq_client.query(f"SELECT * FROM `{project_id}.acsm_observability.dataplex_profile_summary`").result()
     )[0]
     print("==========================================================================")
-    print(f"📈 [Module 1 Outcome] Dataplex Data Profile (`{scan_id}`)")
+    print(f"📈 [Module 2 Outcome] Dataplex Data Profile (`{scan_id}`)")
     print("==========================================================================")
     print(f"  • Target Table             : `{row.target_table}`")
     print(f"  • Observability Table      : `{project_id}.acsm_observability.dataplex_profile_summary`")
@@ -428,7 +428,7 @@ def cmd_data_quality(args):
     )
 
     print("==========================================================================")
-    print(f"✅ [Module 3A Outcome] Dataplex AutoDQ Results Stored in `acsm_observability.dataplex_dq_scan_results`")
+    print(f"✅ [Module 4A Outcome] Dataplex AutoDQ Results Stored in `acsm_observability.dataplex_dq_scan_results`")
     print("==========================================================================")
     for idx, r in enumerate(dq_rows, 1):
         print(
@@ -464,7 +464,7 @@ def cmd_data_quality(args):
         ).result()
     )
     print("\n==========================================================================")
-    print("🚨 [Module 3B Outcome] Upstream Exception Quarantine Stored in `acsm_observability.dq_quarantine_records`")
+    print("🚨 [Module 4B Outcome] Upstream Exception Quarantine Stored in `acsm_observability.dq_quarantine_records`")
     print("==========================================================================")
     for qr in q_rows:
         print(f"  • {qr.rule_id:<32} | {qr.source_table:<25} | {qr.quarantined_rows:>6,} rows | Action: {qr.enforcement_action}")
@@ -474,7 +474,7 @@ def cmd_data_quality(args):
 
 
 # ==============================================================================
-# MODULE 4: Cloud Storage Data Discovery Scan (Golden Demo 06-Data-Discovery-Scan)
+# MODULE 1: Cloud Storage Data Discovery Scan (Golden Demo 06-Data-Discovery-Scan)
 # ==============================================================================
 def cmd_data_discovery(args):
     project_id, authed_session, _ = get_clients(args.project, args.location)
@@ -499,7 +499,7 @@ def cmd_data_discovery(args):
     authed_session.post(f"{scan_url}:run", json={})
 
     print("==========================================================================")
-    print(f"🔍 [Module 4 Outcome] Cloud Storage Lakehouse Discovery (`{scan_id}`)")
+    print(f"🔍 [Module 1 Outcome] Cloud Storage Lakehouse Discovery (`{scan_id}`)")
     print("==========================================================================")
     print(f"  • Scanned GCS Lakehouse Bucket : `gs://{bucket_name}/`")
     print("  • Publishing Mode              : BigQuery External / BigLake Tables")
@@ -510,7 +510,7 @@ def cmd_data_discovery(args):
 
 
 # ==============================================================================
-# MODULE 6: Sensitive Data Protection / Cloud DLP Scan (Golden Demo 07-SDP-Scan)
+# MODULE 5: Sensitive Data Protection / Cloud DLP Scan (Golden Demo 07-SDP-Scan)
 # ==============================================================================
 def cmd_sdp_pii_scan(args):
     project_id, _, bq_client = get_clients(args.project, args.location)
@@ -567,7 +567,7 @@ def cmd_sdp_pii_scan(args):
         ).result()
     )
     print("==========================================================================")
-    print("🛡️ [Module 6 Outcome] Sensitive Data Protection (Cloud DLP) PII Inspection")
+    print("🛡️ [Module 5 Outcome] Sensitive Data Protection (Cloud DLP) PII Inspection")
     print("==========================================================================")
     print(f"  • Inspected Table : `{project_id}.acsm_gold.gold_aeon_customer360_profile`")
     print(f"  • Findings Table  : `{project_id}.acsm_observability.sdp_pii_findings`\n")
@@ -680,7 +680,7 @@ Generate structured JSON aspect values for `acsm_gold.gold_aeon_customer360_prof
     bq_client.query(label_sql).result()
 
     print("==========================================================================")
-    print(f"🏛️ [Module 7 Outcome] Custom Aspect Type + AI-Automated Aspect Tagging (`{aspect_id}`)")
+    print(f"🏛️ [Module 6 Outcome] Custom Aspect Type + AI-Automated Aspect Tagging (`{aspect_id}`)")
     print("==========================================================================")
     print(f"  • Dataplex Custom Aspect Type : `projects/{project_id}/locations/{args.location}/aspectTypes/{aspect_id}`")
     print(f"  • Target Catalog Entry        : `acsm_gold.gold_aeon_customer360_profile`")
@@ -692,7 +692,7 @@ Generate structured JSON aspect values for `acsm_gold.gold_aeon_customer360_prof
 
 
 # ==============================================================================
-# MODULE 8: Row & Column Security + Dynamic Masking (Golden Demo 08)
+# MODULE 7: Row & Column Security + Dynamic Masking (Golden Demo 08)
 # ==============================================================================
 def cmd_setup_cls_masking(args):
     project_id, authed_session, bq_client = get_clients(args.project, args.location)
@@ -818,7 +818,7 @@ def cmd_setup_cls_masking(args):
     bq_client.update_table(table, ["schema"])
 
     print("==========================================================================")
-    print("🔐 [Module 8A Outcome] Column-Level Dynamic Masking (CLS) + Row-Level Security (RLS)")
+    print("🔐 [Module 7.1 Outcome] Column-Level Dynamic Masking (CLS) + Row-Level Security (RLS)")
     print("==========================================================================")
     print(f"  • Taxonomy                : `{taxonomy_display_name}`")
     print("  • CLS Policy Tag 1        : `CIF_NM` -> Masked via `SHA256`")
@@ -851,7 +851,7 @@ def cmd_reset_security_policies(args):
         ).result()
     )[0]
     print("==========================================================================")
-    print("🔓 [Module 8C Outcome] 1-Click Security Policy Reset (Ready for Tracks 2, 3 & 4)")
+    print("🔓 [Module 7.3 Outcome] 1-Click Security Policy Reset (Ready for Tracks 2, 3 & 4)")
     print("==========================================================================")
     print(f"  • Restored Customer Rows  : {row.total_rows:,} rows across {row.states} Malaysian states")
     print(f"  • Sample Unmasked CIF_NM  : {row.sample_name}")
@@ -859,7 +859,7 @@ def cmd_reset_security_policies(args):
 
 
 # ==============================================================================
-# MODULE 9: Serverless FinOps Telemetry (RFP Clauses C1.1.1.18 & C1.1.6.6)
+# MODULE 8: Serverless FinOps Telemetry (RFP Clauses C1.1.1.18 & C1.1.6.6)
 # ==============================================================================
 def cmd_finops_telemetry(args):
     project_id, _, bq_client = get_clients(args.project, args.location)
@@ -894,7 +894,7 @@ def cmd_finops_telemetry(args):
         ).result()
     )
     print("==========================================================================")
-    print("💰 [Module 9 Outcome] Serverless FinOps Telemetry (`acsm_observability.vw_finops_job_telemetry`)")
+    print("💰 [Module 8 Outcome] Serverless FinOps Telemetry (`acsm_observability.vw_finops_job_telemetry`)")
     print("==========================================================================")
     for r in rows:
         print(
