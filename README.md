@@ -155,8 +155,8 @@ Open **[`track1_platform_governance/notebook/03_Governance_Security_and_Data_Qua
 # Track 3: AEON 360 Gold Marts & BQCA Semantic Layer
 bq query --location=asia-southeast1 --use_legacy_sql=false < track3_self_serve_analytics/05_aeon360_gold_marts.sql
 
-# Track 2: BigQuery ML Delinquency (ML.EXPLAIN_PREDICT) & Cross-Sell Models
-bq query --location=asia-southeast1 --use_legacy_sql=false < track2_ml_development/04_bqml_credit_and_cross_sell.sql
+# Track 2: BigQuery ML Next-Best-Product (EP-to-CC Cross-Sell) Pipeline
+bq query --location=asia-southeast1 --use_legacy_sql=false < track2_ml_development/sql/04_bqml_credit_and_cross_sell.sql
 
 # Track 4: BigQuery Vector Search Knowledge Base, LLMOps Telemetry & Google ADK Agent
 bq query --location=asia-southeast1 --use_legacy_sql=false < track4_genai_agents/06_vector_db_and_llmops_tables.sql
