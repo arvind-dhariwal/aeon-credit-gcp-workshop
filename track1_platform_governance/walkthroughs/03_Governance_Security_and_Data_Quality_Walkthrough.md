@@ -22,7 +22,7 @@ Notebook 03 showcases Google Cloud's unified **Dataplex Universal Catalog, Sensi
 | Module | Capability Showcased | 1-Cell Command | Observability Table & Console Verification |
 | :--- | :--- | :--- | :--- |
 | **Step 0** | **Environment, APIs & Automatic SQLX Lineage** (`datalineage.googleapis.com`) | Enables APIs & creates `acsm_observability` dataset | **BigQuery Studio -> `gold_aeon_customer360_profile` -> `Lineage` tab** |
-| **Module 1** | **Cloud Storage Lakehouse Data Discovery Scan** (`06-Data-Discovery-Scan`) | `gcloud dataplex datascans create data-discovery` + `governance_helper.py data-discovery` | Scans `gs://acsm-workshop-landing-{PROJECT_ID}` to auto-discover Lakehouse files |
+| **Module 1** | **Cloud Storage Lakehouse Data Discovery Scan** (`06-Data-Discovery-Scan`) | `gcloud dataplex datascans create data-discovery` + `governance_helper.py data-discovery` + `IPython.display.HTML` link bar | Stores job status & discovered objects in **`acsm_observability.dataplex_discovery_scan_results`** + outputs direct clickable link (`target="_blank"`) to **[Dataplex Cloud Storage Discovery Console](https://console.cloud.google.com/dataplex/cloud-storage-discovery)** (`Scan status` & `Scan history` tab) |
 | **Module 2** | **Automated Statistical Data Profiling** (`02-Data-Profile`) | `gcloud dataplex datascans create data-profile --export-results-table=...` + `governance_helper.py data-profile` | Stores summary in **`acsm_observability.dataplex_profile_summary`** (`dataplex_profile_scan_results`) + **BigQuery Studio `Data Profile` tab** |
 | **Module 3** | **AI Data Insights & Dataset Knowledge Graph** (`03-Data-Insights`) | `governance_helper.py data-insights --datasets=acsm_silver,acsm_gold` + `%%bigquery` SQL audit | Publishes Dataset Knowledge Graph (`SCHEMA_JOIN` on `CIF_ID`) & **100% Dataset, Table, and Column descriptions** |
 | **Module 4** | **Automated Data Quality (AutoDQ) & Quarantine Ledger** (`05-Data-Quality`) | **4.1**: `gcloud dataplex datascans create data-quality` + `governance_helper.py data-quality`<br>**4.2**: `%%bigquery` SQL query on `dataplex_dq_scan_results` | Stores 5-rule evaluation results in **`acsm_observability.dataplex_dq_scan_results`**, quarantined rows in **`acsm_observability.dq_quarantine_records`**, + **BigQuery Studio `Data Quality` tab** |
@@ -33,7 +33,28 @@ Notebook 03 showcases Google Cloud's unified **Dataplex Universal Catalog, Sensi
 
 ---
 
-## 3. Exploring Custom InfoTypes in Module 5
+## 3. Verifying Discovery Scan Completion & Results in Module 1
+
+When **Module 1** runs `acsm-gcs-lakehouse-discovery-scan` over `gs://acsm-workshop-landing-{PROJECT_ID}`, the cell output displays a clickable HTML link bar (`target="_blank"`) that opens a new tab directly to the Console, along with the live job status and discovered objects:
+
+1. **Direct GCP Console Link (Opens in New Tab)**:
+   - **[Dataplex Cloud Storage Discovery Console ↗](https://console.cloud.google.com/dataplex/cloud-storage-discovery)** (`https://console.cloud.google.com/dataplex/cloud-storage-discovery?project={PROJECT_ID}`)
+   - Click **`acsm-gcs-lakehouse-discovery-scan`**:
+     - **Where to verify completion status**: Open the **`Scan history` tab** to see the `Job ID`, `Start time`, `End time`, and **`Status`** (`SUCCEEDED` vs `RUNNING`).
+     - **Where to see the discovery result**: Check the **`Scan status` section** on the overview page for:
+       - **Published BigQuery Dataset**: The auto-published dataset containing the discovered external/BigLake tables.
+       - **Scan Statistics (`dataDiscoveryResult.scanStatistics`)**: `Files scanned` (`scannedFileCount`), `Data processed` (`dataProcessedBytes`), `Tables created` (`tablesCreated`), `Tables updated` (`tablesUpdated`), and `Filesets created` (`filesetsCreated`).
+2. **BigQuery Observability Table (`acsm_observability.dataplex_discovery_scan_results`)**:
+   - `governance_helper.py data-discovery` queries the Dataplex `dataScans.jobs` API (`?view=FULL`) and persists the latest `latest_job_id`, `job_state`, `published_bigquery_dataset`, `scanned_file_count`, `data_processed_bytes`, `tables_created`, and discovered GCS object metadata (`m3CIF.csv.gz`, `Fact_EP_*`, `Fact_CC_*`) into `acsm_observability.dataplex_discovery_scan_results`.
+3. **CLI Verification Commands**:
+   ```bash
+   gcloud dataplex datascans jobs list --location=asia-southeast1 --datascan=acsm-gcs-lakehouse-discovery-scan
+   gcloud dataplex datascans jobs describe <JOB_ID> --location=asia-southeast1 --datascan=acsm-gcs-lakehouse-discovery-scan --view=FULL
+   ```
+
+---
+
+## 4. Exploring Custom InfoTypes in Module 5
 
 Module 5 creates a Cloud DLP **Inspect Template** (`acsm-pdpa-bnm-inspect-template`) combining Google's built-in detectors with **ACSM Custom InfoTypes (`customInfoTypes`)**:
 - **`CUSTOM_ACSM_CIF_ID`**: Custom Regex detector (`^[0-9]{5,10}$`) for One-AEON Customer IDs.
