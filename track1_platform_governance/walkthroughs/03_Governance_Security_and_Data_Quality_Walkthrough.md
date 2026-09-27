@@ -1,52 +1,46 @@
-# Track 1 (Notebook 03) Walkthrough: End-to-End Google Cloud Data Governance, Security & Data Quality
+# Track 1 (Notebook 03) Walkthrough: Fine-Grained Data Governance — RLS, CLS & Dynamic Data Masking in Pure BigQuery SQL
 
 **Notebook**: [`03_Governance_Security_and_Data_Quality.ipynb`](../notebook/03_Governance_Security_and_Data_Quality.ipynb)
-**Helper CLI & Rules YAML**: [`governance_helper.py`](../scripts/governance_helper.py) & [`dq_rules_gold_customer360.yaml`](../scripts/dq_rules_gold_customer360.yaml)
+**Parked Modules Notebook (Can be discarded at end)**: [`03b_Parked_Dataplex_DLP_and_Data_Quality.ipynb`](../notebook/03b_Parked_Dataplex_DLP_and_Data_Quality.ipynb)
+**SQL Script**: [`03_bnm_rmit_pdpa_security.sql`](../sql/03_bnm_rmit_pdpa_security.sql)
 **Target Region**: `asia-southeast1` (Singapore)
-**ACSM RFP Clauses**: `C1.1.1.1`, `C1.1.1.4`–`C1.1.1.10`, `C1.1.1.18`, `C1.1.1.24`, `C1.1.5.3`, `C1.1.5.5`, `C1.1.6.6`
+**ACSM RFP Clauses**: `C1.1.1.24`, `C1.1.5.3`, `C1.1.5.5`, `C1.1.2.2`
 
 ---
 
-## 1. Executive Summary & Architectural Design
+## 1. Executive Summary & Visual Architecture
 
-Notebook 03 showcases Google Cloud's unified **Dataplex Universal Catalog, Sensitive Data Protection (Cloud DLP), Fine-Grained Access Control, and Serverless FinOps** capabilities mapped directly to **BNM RMiT** and **Malaysian PDPA 2010** requirements.
+Notebook 03 demonstrates **Row-Level Security (RLS)**, **Column-Level Security (CLS)**, and **Dynamic Data Masking** **100% purely in BigQuery SQL (`%%bigquery`)** on the single Gold Customer 360 table (`acsm_gold.gold_aeon_customer360_profile`), aligned with **Bank Negara Malaysia (BNM) RMiT** and **Malaysian PDPA 2010**:
 
-- **Explicit Execution + Verification Pattern (`Module X.1` + `Module X.2`)**: Every module in Notebook 03 pairs a concise **Execution Cell (`Module X.1`)**—which also renders a clickable HTML banner (`target="_blank"`) to open the relevant GCP Console tab in a new browser tab—with an **Explicit `%%bigquery` SQL Verification Cell (`Module X.2` / `4.3`)** so users can immediately inspect and verify the structured outcome inside the notebook.
-- **Automatic SQLX Data Lineage**: Because `datalineage.googleapis.com` is enabled across Notebooks 01, 02, and Step 0 of Notebook 03, BigQuery automatically populates the interactive **Lineage** tab across all `acsm_bronze`, `acsm_silver`, and `acsm_gold` SQLX tables.
-- **Centralized Observability Dataset (`acsm_observability`)**: Every scan persists its structured outputs into BigQuery tables under `acsm_observability` for historical audit and Looker dashboards.
+```mermaid
+flowchart TB
+  GOLD[("🏦 Single Source of Truth:\nacsm_gold.gold_aeon_customer360_profile\n(100,000 Customers across 16 Malaysian States)\n• CIF_NM: 'MUHAMMAD FAIZ BIN AHMAD'\n• B_NetIncome: RM 5,400.00")]
 
----
+  subgraph RLS["🔒 1. Row-Level Security (RLS in Pure SQL)"]
+    RLS_POL["CREATE OR REPLACE ROW ACCESS POLICY\nrlp_central_region_branch_manager\nFILTER USING (State IN ('Selangor', 'Kuala Lumpur',\n'Putrajaya', 'Negeri Sembilan'))"]
+  end
 
-## 2. Module-by-Module Walkthrough (Execution + Explicit Verification Cells)
+  subgraph CLS["🛡️ 2. Column-Level Security & Dynamic Masking (CLS in Pure SQL)"]
+    CLS_VIEW["CREATE OR REPLACE VIEW\nacsm_gold.vw_customer360_rls_cls_masked\n• Partial Masking (CIF_NM): 'MU****AD'\n• SHA-256 Hash Masking (CIF_NM): '8f4b2c91e03a...'\n• Default 0.0 Masking (B_NetIncome): 0.0 + 'M40' Band"]
+  end
 
-| Module | ACSM RFP Clause | Capability Showcased | Execution Cell(s) | Explicit Verification Cell (`%%bigquery` SQL) & Direct Console Link (`target="_blank"`) |
-| :--- | :--- | :--- | :--- | :--- |
-| **Step 0** | `C1.1.1.9` | **Environment, APIs & Automatic SQLX Lineage** (`datalineage.googleapis.com`) | Enables APIs, creates `acsm_observability` dataset, and downloads `governance_helper.py` + [`dq_rules_gold_customer360.yaml`](../scripts/dq_rules_gold_customer360.yaml) | **BigQuery Studio -> `gold_aeon_customer360_profile` -> `Lineage` tab** |
-| **Module 1** | `C1.1.1.1` | **Cloud Storage Lakehouse Data Discovery Scan** (`DATA_DISCOVERY`) | **1.1**: `governance_helper.py data-discovery` (grants Dataplex Discovery Service Agent IAM, organizes `.csv.gz` into per-table folders `discovered_tables/<Table>/<Table>.csv.gz`, sets `csvOptions.headerRows=1`, and triggers scan) | **1.2 (`%%bigquery`)**: Queries **`acsm_observability.dataplex_discovery_scan_results`** (`latest_job_id`, `job_state`, `scanned_file_count`, 7 discovered tables) + direct link to **[Dataplex Cloud Storage Discovery Console ↗](https://console.cloud.google.com/dataplex/cloud-storage-discovery)** (`Scan status` & `Scan history` tab) |
-| **Module 2** | `C1.1.1.4` | **Automated Statistical Data Profiling** (`DATA_PROFILE`) | **2.1**: `gcloud dataplex datascans create data-profile --export-results-table=...` + `governance_helper.py data-profile` | **2.2 (`%%bigquery`)**: Queries **`acsm_observability.dataplex_profile_summary`** (null %, uniqueness, income/CTOS/DSR distributions across 100,000 customers) + direct link to **BigQuery Studio `Data Profile` tab ↗** |
-| **Module 3** | `C1.1.1.10` | **AI Data Insights & Dataset Knowledge Graph** (`DATA_DOCUMENTATION`) | **3.1**: `governance_helper.py data-insights --datasets=acsm_silver,acsm_gold` | **3.2 (`%%bigquery`)**: Queries `INFORMATION_SCHEMA` across `acsm_bronze`, `acsm_silver`, and `acsm_gold` to verify **100% Dataset, Table & Column description coverage** + direct link to **BigQuery Studio `Insights` tab ↗** |
-| **Module 4** | `C1.1.1.5`–`C1.1.1.7` | **Automated Data Quality (AutoDQ) & Quarantine Ledger** (`DATA_QUALITY`) | **4.1**: Inspect table-level rules YAML (`!cat dq_rules_gold_customer360.yaml`)<br>**4.2**: `gcloud dataplex datascans create data-quality --data-quality-spec-file=dq_rules_gold_customer360.yaml` + `governance_helper.py data-quality` | **4.3 (`%%bigquery`)**: Queries **`acsm_observability.dataplex_dq_scan_results`** (5 YAML rule evaluations) & **`acsm_observability.dq_quarantine_records`** + direct link to **BigQuery Studio `Data Quality` tab ↗** |
-| **Module 5** | `C1.1.5.3` | **Sensitive Data Protection (Cloud DLP) Built-in & Custom InfoType Scan** (`dlp.googleapis.com`) | **5.1**: `governance_helper.py sdp-pii-scan` (`acsm-pdpa-bnm-inspect-template`) | **5.2 (`%%bigquery`)**: Queries **`acsm_observability.sdp_pii_findings`** to verify Built-in (`PERSON_NAME`) + Custom InfoTypes (`CUSTOM_ACSM_CIF_ID`, `CUSTOM_BNM_FINANCIAL_INCOME_MYR`, `CUSTOM_MALAYSIA_STATE_RESIDENCE`) + direct links to **Cloud DLP Console ↗** |
-| **Module 6** | `C1.1.1.8` | **Dataplex Custom Governance Aspect Types & AI-Automated Aspect Tagging via Gemini** | **6.1**: `governance_helper.py ai-catalog-governance` (`acsm-bnm-rmit-governance-aspect`) | **6.2 (`%%bigquery`)**: Queries **`acsm_observability.dataplex_ai_catalog_aspects`** (`data_domain`, `medallion_layer`, `bnm_rmit_tier`, `pdpa_contains_pii`, `identified_pii_columns`, `recommended_masking_policy`, `data_steward`) + direct link to **Dataplex Catalog Entry ↗** |
-| **Module 7** | `C1.1.1.24`, `C1.1.5.3`, `C1.1.5.5` | **Fine-Grained Row-Level Security (RLS) & Column Dynamic Masking (CLS) + 1-Click Reset** | **7.1**: `setup-cls-masking` + `bq query` RLS policy | **7.2 (`%%bigquery`)**: Queries `acsm_gold.gold_aeon_customer360_profile` to verify live simultaneous `SHA256` name masking + `0` income masking + 4 Central Region states<br>**7.3**: Runs `reset-security-policies` & verifies 100,000 unmasked rows restored |
-| **Module 8** | `C1.1.1.18`, `C1.1.6.6` | **Serverless FinOps Cost Attribution & Workload Telemetry** | **8.1**: `governance_helper.py finops-telemetry` | **8.2 (`%%bigquery`)**: Queries **`acsm_observability.vw_finops_job_telemetry`** to verify 7-day job count, `$0` serverless batch load pool, billed MB, and slot-seconds by workload tier |
+  OUT["✅ Combined RLS + CLS Output:\n• Only 4 Central Region States returned\n• Customer Names & Net Income dynamically masked!"]
 
----
-
-## 3. Inspecting the Table-Level Data Quality Rules YAML (`Module 4.1`)
-
-Before running the Dataplex AutoDQ scan in **Module 4.2**, **Module 4.1** explicitly displays the declarative YAML file ([`track1_platform_governance/scripts/dq_rules_gold_customer360.yaml`](../scripts/dq_rules_gold_customer360.yaml), downloaded to `./dq_rules_gold_customer360.yaml` in Step 0):
-- **`cif_id_not_null`** (`COMPLETENESS`, `threshold: 1.0`): `CIF_ID` must be non-null.
-- **`cif_id_unique`** (`UNIQUENESS`, `threshold: 1.0`): `CIF_ID` must be 100% unique.
-- **`positive_annual_income`** (`VALIDITY`, `threshold: 0.99`): `B_AnnualIncome` must be strictly `> 0`.
-- **`valid_bnm_dsr_range`** (`VALIDITY`, `threshold: 0.95`): `avg_ep_dsr` must fall within `[0, 100]`.
-- **`malaysian_state_not_null`** (`COMPLETENESS`, `threshold: 1.0`): `State` must be non-null for Row-Level Security (RLS).
+  GOLD --> RLS_POL
+  GOLD --> CLS_VIEW
+  RLS_POL & CLS_VIEW --> OUT
+```
 
 ---
 
-## 4. Exploring Custom InfoTypes in Module 5
+## 2. Step-by-Step Pure SQL Walkthrough
 
-Module 5 creates a Cloud DLP **Inspect Template** (`acsm-pdpa-bnm-inspect-template`) combining Google's built-in detectors with **ACSM Custom InfoTypes (`customInfoTypes`)**:
-- **`CUSTOM_ACSM_CIF_ID`**: Custom Regex detector (`^[0-9]{5,10}$`) for One-AEON Customer IDs.
-- **`CUSTOM_BNM_FINANCIAL_INCOME_MYR`**: Custom Dictionary detector for BNM RMiT confidential income fields (`B_NetIncome`, `B_AnnualIncome`).
-- **`CUSTOM_MALAYSIA_STATE_RESIDENCE`**: Custom 16-State Dictionary detector (`Selangor`, `Kuala Lumpur`, `Johor`, `Penang`, etc.) for regional RLS governance.
+| Step | Pure BigQuery SQL (`%%bigquery`) | What Happens & What You Observe |
+| :--- | :--- | :--- |
+| **Step 0** | Environment Setup & Reset Check | Auto-detects `PROJECT_ID` in `asia-southeast1` and ensures no prior Row Access Policy is active before starting the baseline check. |
+| **Step 1.1** | **Baseline Inspection (Before Security Policies)** | Queries `acsm_gold.gold_aeon_customer360_profile` showing **`100,000` visible customers across all `16` Malaysian states**, with raw unmasked customer names (`CIF_NM`) and exact monthly net income (`B_NetIncome`). |
+| **Step 1.2a** | **Apply Row-Level Security (`CREATE OR REPLACE ROW ACCESS POLICY`)** | Uses `EXECUTE IMMEDIATE` with `SESSION_USER()` to create `rlp_central_region_branch_manager` on `acsm_gold.gold_aeon_customer360_profile` filtering `State IN ('Selangor', 'Kuala Lumpur', 'Putrajaya', 'Negeri Sembilan')`. |
+| **Step 1.2b** | **Verify RLS Enforcement (`SELECT State, COUNT(*) ...`)** | Queries the exact same table (`acsm_gold.gold_aeon_customer360_profile`) with **no `WHERE` clause** — only the **4 Central Region states** (`Selangor`, `Kuala Lumpur`, `Putrajaya`, `Negeri Sembilan`) are returned; the other 12 Malaysian states are automatically filtered out! |
+| **Step 1.3a** | **Apply Column-Level Security & Dynamic Data Masking (`CREATE OR REPLACE VIEW`)** | Creates `acsm_gold.vw_customer360_rls_cls_masked` implementing 3 pure-SQL masking patterns based on `SESSION_USER()`:\n1. **Partial Redaction (`CIF_NM`)**: `CONCAT(SUBSTR(CIF_NM, 1, 2), '****', SUBSTR(CIF_NM, -2))` (`MU****AD`)\n2. **Cryptographic SHA-256 Hash (`CIF_NM`)**: `TO_HEX(SHA256(CAST(CIF_NM AS STRING)))`\n3. **Default `0.0` Masking + BNM Income Banding (`B_NetIncome`)**: Masks exact net income to `0.0` while exposing `B40 (< RM 3,000)`, `M40 (RM 3,000 - RM 7,000)`, or `T20 (> RM 7,000)`. |
+| **Step 1.3b** | **Verify Combined RLS + CLS Masking** | Queries `acsm_gold.vw_customer360_rls_cls_masked` and verifies that **both Row-Level Security (only 4 Central Region states) and Column-Level Masking (`MU****AD`, SHA-256 hash, `0.0` net income)** are enforced simultaneously. |
+| **Step 1.4** | **1-Click Pure SQL Policy Reset (`DROP ALL ROW ACCESS POLICIES`)** | Drops the Row Access Policy on `acsm_gold.gold_aeon_customer360_profile` and verifies all **`100,000` customers across all `16` Malaysian states** are restored for downstream Notebooks 04–05 and Tracks 2–4. |

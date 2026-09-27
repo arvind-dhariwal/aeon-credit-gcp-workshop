@@ -1,6 +1,6 @@
 -- =============================================================================
 -- TRACK 2: AGENTIC DATA SCIENCE & END-TO-END BIGQUERY ML (BQML + SQL GRAPH RAG)
--- File: 04_bqml_credit_and_cross_sell.sql
+-- File: sql/04_bqml_credit_and_cross_sell.sql
 -- Region: asia-southeast1 (Singapore)
 --
 -- Fulfils ACSM RFP Clauses C1.1.4.1–C1.1.4.10, C1.1.3.1, C1.1.3.6 & Annexure M1.5.1:
@@ -119,8 +119,6 @@ FROM `acsm_gold.ml_customer_feature_store`;
 -- -----------------------------------------------------------------------------
 -- MODULE 3A: Supervised Model 1 — Credit Delinquency & AKPK Propensity
 -- Registered directly into Vertex AI Model Registry (Clauses C1.1.4.6, C1.1.4.10)
--- Note: Uses LOGISTIC_REG for fast (~25s) live workshop training with global &
---       local SHAP explainability. Can also be set to BOOSTED_TREE_CLASSIFIER.
 -- -----------------------------------------------------------------------------
 CREATE OR REPLACE MODEL `acsm_gold.model_delinquency_propensity`
 OPTIONS (

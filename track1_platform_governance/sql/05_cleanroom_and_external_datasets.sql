@@ -5,11 +5,17 @@
 -- Region: asia-southeast1 (Singapore)
 -- =============================================================================
 
--- 1. Create Clean Room & Subscribed External Data Schemas in asia-southeast1
+-- 1. Create Clean Room, Partner (AEON Retail), & Subscribed External Data Schemas in asia-southeast1
 CREATE SCHEMA IF NOT EXISTS `acsm_cleanroom`
 OPTIONS (
   location = 'asia-southeast1',
   description = 'ACSM & AEON Retail Privacy-Preserving Data Clean Room in Singapore (asia-southeast1) — BNM RMiT & Malaysian PDPA Compliant'
+);
+
+CREATE SCHEMA IF NOT EXISTS `aeon_retail`
+OPTIONS (
+  location = 'asia-southeast1',
+  description = 'Party 2 (AEON Retail Malaysia / AEON BiG) Partner Loyalty Dataset in Singapore (asia-southeast1) contributed to the Data Clean Room'
 );
 
 CREATE SCHEMA IF NOT EXISTS `acsm_subscribed_data`
@@ -18,18 +24,18 @@ OPTIONS (
   description = 'Subscribed External Google Datasets via Analytics Hub in Singapore (asia-southeast1): Google Trends, Malaysia Places POI Catalog, and Google Ads Campaign Performance'
 );
 
-CREATE SCHEMA IF NOT EXISTS `acsm_gold`
+CREATE SCHEMA IF NOT EXISTS `acsm_analyticshub_shared`
 OPTIONS (
   location = 'asia-southeast1',
-  description = 'ACSM Gold Medallion Layer in Singapore (asia-southeast1)'
+  description = 'ACSM Dedicated Analytics Hub Shared Publisher Dataset in Singapore (asia-southeast1) — exposes ONLY curated zero-copy views to AEON Retail without exposing internal acsm_gold tables'
 );
 
 -- =============================================================================
 -- PART A: ANALYTICS HUB ZERO-COPY SHARED VIEW (ACSM -> AEON RETAIL)
 -- =============================================================================
-CREATE OR REPLACE VIEW `acsm_gold.vw_analyticshub_merchant_spend_aggregations`
+CREATE OR REPLACE VIEW `acsm_analyticshub_shared.vw_analyticshub_merchant_spend_aggregations`
 OPTIONS (
-  description = 'Curated Analytics Hub Zero-Copy Shared View: ACSM Merchant Spend Aggregations shared with AEON Retail without exposing individual cardholder PII'
+  description = 'Curated Analytics Hub Zero-Copy Authorized View: ACSM Merchant Spend Aggregations shared with AEON Retail without exposing internal gold tables or individual cardholder PII'
 ) AS
 SELECT
   p.PriviledgeMerchantsGrp AS merchant_group,
@@ -45,10 +51,10 @@ GROUP BY 1, 2;
 -- Deterministically derived from m3CIF so overlapping joint customers exist across
 -- major Malaysian states (>= 20 customers) while smaller segments (< 20 customers)
 -- are automatically suppressed by the Clean Room k-anonymity threshold.
-CREATE OR REPLACE TABLE `acsm_cleanroom.partner_aeon_retail_shoppers`
+CREATE OR REPLACE TABLE `aeon_retail.partner_aeon_retail_shoppers`
 CLUSTER BY hashed_cif_match, preferred_aeon_store
 OPTIONS (
-  description = 'AEON Supermarket & Department Store Loyalty Member Spend contributed to the ACSM-AEON Data Clean Room (keyed on privacy-safe CIF match identifier).'
+  description = 'Party 2 (AEON Retail Malaysia) Supermarket & Department Store Loyalty Member Spend contributed to the ACSM-AEON Data Clean Room (keyed on privacy-safe CIF match identifier).'
 ) AS
 SELECT
   CAST(c.CIF_ID AS STRING) AS hashed_cif_match,
@@ -89,7 +95,7 @@ SELECT
 FROM `acsm_bronze.m3CIF` c
 JOIN `acsm_bronze.Fact_CC_Sales` s
   ON CAST(c.CIF_ID AS STRING) = CAST(s.CIF_No AS STRING)
-JOIN `acsm_cleanroom.partner_aeon_retail_shoppers` r
+JOIN `aeon_retail.partner_aeon_retail_shoppers` r
   ON CAST(c.CIF_ID AS STRING) = CAST(r.hashed_cif_match AS STRING)
 GROUP BY 1, 2
 HAVING COUNT(DISTINCT c.CIF_ID) >= 20;
