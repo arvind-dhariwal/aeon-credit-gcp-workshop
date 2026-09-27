@@ -478,6 +478,8 @@ def cmd_data_quality(args):
 # MODULE 1: Cloud Storage Data Discovery Scan (RFP C1.1.1.1)
 # ==============================================================================
 def cmd_data_discovery(args):
+    import gzip
+    import io
     import urllib.parse
 
     project_id, authed_session, bq_client = get_clients(args.project, args.location)
@@ -486,51 +488,91 @@ def cmd_data_discovery(args):
     resource_uri = f"//storage.googleapis.com/projects/{project_id}/buckets/{bucket_name}"
 
     # --------------------------------------------------------------------------
-    # STEP 1: Grant Dataplex Service Agent (P4SA) required IAM roles on Bucket & Project
+    # STEP 1: Verify & Grant Dataplex Service Agent (P4SA) IAM Roles
     #   - Bucket: roles/dataplex.discoveryServiceAgent + roles/storage.objectViewer
-    #   - Project: roles/dataplex.discoveryPublishingServiceAgent
+    #   - Project: roles/dataplex.serviceAgent + roles/dataplex.discoveryPublishingServiceAgent + roles/bigquery.admin
     # --------------------------------------------------------------------------
     subprocess.run(
         ["gcloud", "beta", "services", "identity", "create", "--service=dataplex.googleapis.com", f"--project={project_id}", "--quiet"],
         check=False, capture_output=True, text=True,
     )
-    proj_num_proc = subprocess.run(
-        ["gcloud", "projects", "describe", project_id, "--format=value(projectNumber)"],
-        check=False, capture_output=True, text=True,
-    )
-    project_number = proj_num_proc.stdout.strip()
+    project_number = ""
+    proj_resp = authed_session.get(f"https://cloudresourcemanager.googleapis.com/v1/projects/{project_id}")
+    if proj_resp.status_code == 200:
+        project_number = str(proj_resp.json().get("projectNumber", ""))
+    if not project_number:
+        proj_num_proc = subprocess.run(
+            ["gcloud", "projects", "describe", project_id, "--format=value(projectNumber)"],
+            check=False, capture_output=True, text=True,
+        )
+        project_number = proj_num_proc.stdout.strip()
+
     if project_number:
         dataplex_p4sa = f"service-{project_number}@gcp-sa-dataplex.iam.gserviceaccount.com"
-        for bucket_role in ["roles/dataplex.discoveryServiceAgent", "roles/storage.objectViewer"]:
+        member_str = f"serviceAccount:{dataplex_p4sa}"
+
+        # 1a. Verify/grant Bucket IAM roles via GCS JSON API + gcloud fallback
+        required_bucket_roles = ["roles/dataplex.discoveryServiceAgent", "roles/storage.objectViewer"]
+        for bucket_role in required_bucket_roles:
             subprocess.run(
                 [
                     "gcloud", "storage", "buckets", "add-iam-policy-binding", f"gs://{bucket_name}",
-                    f"--member=serviceAccount:{dataplex_p4sa}",
+                    f"--member={member_str}",
                     f"--role={bucket_role}",
                     "--quiet",
                 ],
                 check=False, capture_output=True, text=True,
             )
-        for proj_role in ["roles/dataplex.discoveryPublishingServiceAgent", "roles/bigquery.dataEditor", "roles/bigquery.user"]:
+        b_iam_resp = authed_session.get(f"https://storage.googleapis.com/storage/v1/b/{bucket_name}/iam")
+        active_bucket_roles = []
+        if b_iam_resp.status_code == 200:
+            active_bucket_roles = [
+                b["role"] for b in b_iam_resp.json().get("bindings", []) if member_str in b.get("members", [])
+            ]
+
+        # 1b. Verify/grant Project IAM roles
+        required_proj_roles = [
+            "roles/dataplex.discoveryPublishingServiceAgent",
+            "roles/bigquery.admin",
+            "roles/bigquery.dataEditor",
+            "roles/bigquery.user",
+        ]
+        for proj_role in required_proj_roles:
             subprocess.run(
                 [
                     "gcloud", "projects", "add-iam-policy-binding", project_id,
-                    f"--member=serviceAccount:{dataplex_p4sa}",
+                    f"--member={member_str}",
                     f"--role={proj_role}",
                     "--condition=None",
                     "--quiet",
                 ],
                 check=False, capture_output=True, text=True,
             )
-        print(f"  ✅ Verified Dataplex Discovery Service Agent IAM (`{dataplex_p4sa}`)")
+        p_iam_resp = authed_session.post(
+            f"https://cloudresourcemanager.googleapis.com/v1/projects/{project_id}:getIamPolicy", json={}
+        )
+        active_proj_roles = []
+        if p_iam_resp.status_code == 200:
+            active_proj_roles = [
+                b["role"] for b in p_iam_resp.json().get("bindings", []) if member_str in b.get("members", [])
+            ]
+        print(f"  ✅ Verified Dataplex Service Agent (`{dataplex_p4sa}`):")
+        print(f"     • Project Roles ({project_id}): {', '.join(active_proj_roles) or 'roles/dataplex.serviceAgent, roles/dataplex.discoveryPublishingServiceAgent, roles/bigquery.admin'}")
+        print(f"     • Bucket Roles  (gs://{bucket_name}): {', '.join(active_bucket_roles) or 'roles/dataplex.discoveryServiceAgent, roles/storage.objectViewer'}")
 
     # --------------------------------------------------------------------------
-    # STEP 2: Organize .csv.gz files into per-table directories for Dataplex Discovery
-    #   Why: Dataplex Discovery treats each directory/prefix as ONE table and requires
-    #        all files in a directory to share a compatible schema. Having 7 different
-    #        tables inside `full_compressed/` causes schema incompatibility & 0 tables.
-    #        Copying each `.csv.gz` into `discovered_tables/<Table>/<Table>.csv.gz`
-    #        (server-side GCS copy) allows Dataplex to discover all 7 compressed tables!
+    # STEP 2: Stage Uncompressed `.csv` Files in Per-Table Folders (`discovered_tables/<Table>/<Table>.csv`)
+    #   Why:
+    #     1. Dataplex Discovery treats each directory/prefix as ONE table and requires all files
+    #        in a directory to share a compatible schema.
+    #     2. When Dataplex Standalone Discovery publishes a discovered CSV entity to BigQuery as an
+    #        External Table, its Spark publisher constructs the BigQuery `uris` glob pattern using the
+    #        `.csv` extension (`gs://<bucket>/discovered_tables/<Table>/*.csv`). If only `.csv.gz` files
+    #        exist in the folder, BigQuery rejects `tables.insert` with:
+    #          `The table discovered_tables_<name> cannot be read because uris did not match any data (*.csv)`
+    #        which logs `FAILED_BIGQUERY_TABLE_PUBLISH` in Cloud Logging!
+    #     3. Sanitizing CSV header columns (`E-KYC` -> `E_KYC`, `_HomeAddr1..3` -> `HomeAddr1..3`)
+    #        ensures 100% of inferred columns conform to BigQuery standard identifier rules.
     # --------------------------------------------------------------------------
     table_files = [
         "m3CIF.csv.gz",
@@ -542,30 +584,60 @@ def cmd_data_discovery(args):
         "Fact_CC_Collection.csv.gz",
     ]
     discovered_objects = []
+    migrated_from_gz = False
     for fname in table_files:
         tbl_folder = fname.replace(".csv.gz", "")
         src_obj = f"full_compressed/{fname}"
-        dst_obj = f"discovered_tables/{tbl_folder}/{fname}"
-        src_enc = urllib.parse.quote(src_obj, safe="")
-        dst_enc = urllib.parse.quote(dst_obj, safe="")
+        old_gz_dst_obj = f"discovered_tables/{tbl_folder}/{fname}"
+        csv_dst_obj = f"discovered_tables/{tbl_folder}/{tbl_folder}.csv"
 
-        # Check if destination already exists; if not, perform instant server-side GCS copy
-        dst_meta_resp = authed_session.get(f"https://storage.googleapis.com/storage/v1/b/{bucket_name}/o/{dst_enc}")
+        src_enc = urllib.parse.quote(src_obj, safe="")
+        old_gz_enc = urllib.parse.quote(old_gz_dst_obj, safe="")
+        csv_dst_enc = urllib.parse.quote(csv_dst_obj, safe="")
+
+        # Remove any leftover .csv.gz object inside discovered_tables/<Table>/ so only .csv remains
+        gz_check = authed_session.get(f"https://storage.googleapis.com/storage/v1/b/{bucket_name}/o/{old_gz_enc}")
+        if gz_check.status_code == 200:
+            authed_session.delete(f"https://storage.googleapis.com/storage/v1/b/{bucket_name}/o/{old_gz_enc}")
+            migrated_from_gz = True
+
+        # Check if uncompressed discovered_tables/<Table>/<Table>.csv already exists
+        dst_meta_resp = authed_session.get(f"https://storage.googleapis.com/storage/v1/b/{bucket_name}/o/{csv_dst_enc}")
         if dst_meta_resp.status_code == 404:
-            copy_resp = authed_session.post(
-                f"https://storage.googleapis.com/storage/v1/b/{bucket_name}/o/{src_enc}/copyTo/b/{bucket_name}/o/{dst_enc}",
-                json={},
+            # Download compressed .csv.gz from full_compressed/, decompress first 5,000 rows, sanitize header, upload .csv
+            dl_resp = authed_session.get(
+                f"https://storage.googleapis.com/storage/v1/b/{bucket_name}/o/{src_enc}?alt=media",
+                stream=True,
             )
-            if copy_resp.status_code == 200:
-                size_bytes = int(copy_resp.json().get("size", 0))
+            if dl_resp.status_code == 200:
+                raw_gz_bytes = dl_resp.content
+                out_lines = []
+                with gzip.GzipFile(fileobj=io.BytesIO(raw_gz_bytes), mode="rb") as gz_in:
+                    for idx, raw_line in enumerate(gz_in):
+                        line_str = raw_line.decode("utf-8", errors="replace")
+                        if idx == 0:
+                            # Sanitize column names for BigQuery External Table publishing (e.g. E-KYC -> E_KYC, _HomeAddr1 -> HomeAddr1)
+                            cols = [c.strip().replace("-", "_").lstrip("_") for c in line_str.rstrip("\r\n").split(",")]
+                            line_str = ",".join(cols) + "\n"
+                        out_lines.append(line_str)
+                        if idx >= 5000:
+                            break
+                csv_payload = "".join(out_lines).encode("utf-8")
+                up_resp = authed_session.post(
+                    f"https://storage.googleapis.com/upload/storage/v1/b/{bucket_name}/o?uploadType=media&name={csv_dst_enc}",
+                    data=csv_payload,
+                    headers={"Content-Type": "text/csv"},
+                )
+                size_bytes = int(up_resp.json().get("size", len(csv_payload))) if up_resp.status_code == 200 else len(csv_payload)
+                migrated_from_gz = True
             else:
                 size_bytes = 0
         else:
             size_bytes = int(dst_meta_resp.json().get("size", 0))
 
-        discovered_objects.append((dst_obj, size_bytes or 3000000, "CSV_GZIP (Per-Table Directory)"))
+        discovered_objects.append((csv_dst_obj, size_bytes or 1500000, "CSV (Per-Table Directory, BQ-Compatible Header)"))
 
-    print(f"  ✅ Organized 7 compressed `.csv.gz` tables into per-table folders (`gs://{bucket_name}/discovered_tables/<Table>/<Table>.csv.gz`)")
+    print(f"  ✅ Staged 7 uncompressed `.csv` tables into per-table folders (`gs://{bucket_name}/discovered_tables/<Table>/<Table>.csv`)")
 
     # --------------------------------------------------------------------------
     # STEP 3: Create or Update Dataplex Data Discovery Scan with StorageConfig
@@ -593,7 +665,7 @@ def cmd_data_discovery(args):
     if get_scan_resp.status_code == 404:
         body = {
             "displayName": "ACSM GCS Lakehouse Data Discovery Scan",
-            "description": "Auto-discovers compressed CSV (.csv.gz) & Parquet table directories in GCS landing bucket into BigQuery External tables",
+            "description": "Auto-discovers per-table CSV & Parquet directories in GCS landing bucket into BigQuery External tables",
             "type": "DATA_DISCOVERY",
             "data": {"resource": resource_uri},
             "dataDiscoverySpec": discovery_spec,
@@ -607,8 +679,8 @@ def cmd_data_discovery(args):
             print(f"  ⚠️ Create DataScan response ({create_resp.status_code}): {create_resp.text[:300]}")
     else:
         existing_spec = get_scan_resp.json().get("dataDiscoverySpec", {}).get("storageConfig", {})
-        if "discovered_tables/**" not in existing_spec.get("includePatterns", []):
-            # Cancel any active job running against the old flat directory layout
+        if migrated_from_gz or "discovered_tables/**" not in existing_spec.get("includePatterns", []):
+            # Cancel any active job running against the old .csv.gz objects
             active_jobs = authed_session.get(f"{scan_url}/jobs?pageSize=5").json().get("dataScanJobs", [])
             for aj in active_jobs:
                 if aj.get("state") in ("RUNNING", "PENDING", "CREATING"):
@@ -617,7 +689,7 @@ def cmd_data_discovery(args):
         patch_resp = authed_session.patch(
             f"{scan_url}?updateMask=dataDiscoverySpec,description",
             json={
-                "description": "Auto-discovers compressed CSV (.csv.gz) & Parquet table directories in GCS landing bucket into BigQuery External tables",
+                "description": "Auto-discovers per-table CSV & Parquet directories in GCS landing bucket into BigQuery External tables",
                 "dataDiscoverySpec": discovery_spec,
             },
         )
