@@ -166,7 +166,7 @@ WITH ep_agg AS (
     CIF_ID,
     COUNT(*) AS ep_app_count,
     ROUND(SUM(COALESCE(FIN_AMT, 0)), 2) AS total_ep_financed_myr,
-    ROUND(AVG(NEW_DSR), 2) AS avg_ep_new_dsr
+    ROUND(AVG(NEW_DSR), 2) AS avg_ep_dsr
   FROM `acsm_silver.silver_ep_underwriting`
   GROUP BY CIF_ID
 ),
@@ -200,7 +200,7 @@ SELECT
   c.RecvPromo_FG,
   COALESCE(ep.ep_app_count, 0) AS ep_app_count,
   COALESCE(ep.total_ep_financed_myr, 0) AS total_ep_financed_myr,
-  ep.avg_ep_new_dsr,
+  ep.avg_ep_dsr,
   COALESCE(cc.cc_app_count, 0) AS cc_app_count,
   COALESCE(cc.total_cc_limit_myr, 0) AS total_cc_limit_myr,
   cc.latest_ctos_score,

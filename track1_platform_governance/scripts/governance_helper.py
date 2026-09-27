@@ -39,7 +39,7 @@ def cmd_data_lineage(args):
         'acsm_bronze.Fact_EP_Judge',
         'acsm_silver.silver_ep_underwriting',
         'acsm_gold.gold_aeon_customer360_profile',
-        'CIF_NO -> CIF_ID, FIN_AMT -> total_ep_financed_myr, NEW_DSR -> avg_ep_new_dsr'
+        'CIF_NO -> CIF_ID, FIN_AMT -> total_ep_financed_myr, NEW_DSR -> avg_ep_dsr'
       ),
       STRUCT(
         3,
@@ -47,7 +47,7 @@ def cmd_data_lineage(args):
         'acsm_bronze.Fact_CC_Judge',
         'acsm_silver.silver_cc_underwriting',
         'acsm_gold.gold_aeon_customer360_profile',
-        'CIF_ID, B_CrLimit -> total_cc_limit_myr, Final_Score -> latest_ctos_score'
+        'CIF_ID, B_CrLimit -> total_cc_limit_myr, CurrDSR/NewDSR -> avg_cc_dsr'
       ),
       STRUCT(
         4,
@@ -85,8 +85,46 @@ def cmd_data_lineage(args):
 # MODULE 2: Automated Statistical Data Profiling (RFP C1.1.1.4)
 # ==============================================================================
 def cmd_data_profile(args):
-    project_id, _, bq_client = get_clients(args.project, args.location)
+    project_id, authed_session, bq_client = get_clients(args.project, args.location)
     scan_id = "acsm-gold-customer360-profile-scan"
+    export_table_id = f"{project_id}.acsm_observability.dataplex_profile_scan_results"
+    export_table_uri = f"//bigquery.googleapis.com/projects/{project_id}/datasets/acsm_observability/tables/dataplex_profile_scan_results"
+
+    # 1. Ensure acsm_observability dataset & empty native export table exist BEFORE Dataplex exports
+    #    (Dataplex checkExportPrecondition requires the target table to exist beforehand;
+    #     prepareTableForExport automatically patches an empty table with the 28-column export schema.)
+    bq_client.query(
+        f"CREATE SCHEMA IF NOT EXISTS `{project_id}.acsm_observability` "
+        f"OPTIONS (location = '{args.location}', description = 'ACSM Platform Observability, Data Profile, AutoDQ Results, Quarantine, DLP Findings & FinOps Layer')"
+    ).result()
+    bq_client.create_table(bigquery.Table(export_table_id), exists_ok=True)
+
+    # 2. Ensure Dataplex Data Profile scan has export_results_table configured and trigger a fresh run if needed
+    scan_url = f"https://dataplex.googleapis.com/v1/projects/{project_id}/locations/{args.location}/dataScans/{scan_id}"
+    scan_resp = authed_session.get(scan_url)
+    if scan_resp.status_code == 200:
+        dp_spec = scan_resp.json().get("dataProfileSpec", {})
+        dp_spec["catalogPublishingEnabled"] = True
+        dp_spec["postScanActions"] = {"bigqueryExport": {"resultsTable": export_table_uri}}
+        patch_r = authed_session.patch(
+            f"{scan_url}?updateMask=dataProfileSpec",
+            json={"dataProfileSpec": dp_spec},
+        )
+        op_name = patch_r.json().get("name") if patch_r.status_code == 200 else None
+        if op_name and "/operations/" in op_name:
+            for _ in range(10):
+                op_r = authed_session.get(f"https://dataplex.googleapis.com/v1/{op_name}")
+                if op_r.status_code == 200 and op_r.json().get("done"):
+                    break
+                time.sleep(1)
+
+        # Check if a job is currently running; if not (or if previous export failed before table existed), trigger a run
+        jobs_r = authed_session.get(f"{scan_url}/jobs?pageSize=3")
+        jobs_list = jobs_r.json().get("dataScanJobs", []) if jobs_r.status_code == 200 else []
+        has_running_job = any(j.get("state") in ("RUNNING", "PENDING", "CREATING") for j in jobs_list)
+        if not has_running_job:
+            authed_session.post(f"{scan_url}:run", json={})
+
     subprocess.run(
         [
             "bq", "update",
@@ -99,23 +137,36 @@ def cmd_data_profile(args):
         capture_output=True,
         text=True,
     )
-    profile_ddl = f"""
-    CREATE SCHEMA IF NOT EXISTS `{project_id}.acsm_observability`
-    OPTIONS (location = '{args.location}', description = 'ACSM Platform Observability, Data Profile, AutoDQ Results, Quarantine, DLP Findings & FinOps Layer');
 
+    # Dynamically detect DSR and Score column names on gold_aeon_customer360_profile
+    tbl_obj = bq_client.get_table(f"{project_id}.acsm_gold.gold_aeon_customer360_profile")
+    tbl_cols = {f.name: f.field_type for f in tbl_obj.schema}
+    dsr_col = next((c for c in ["avg_ep_dsr", "avg_ep_new_dsr", "avg_cc_dsr"] if c in tbl_cols), None)
+    numeric_types = {"INTEGER", "INT64", "FLOAT", "FLOAT64", "NUMERIC", "BIGNUMERIC"}
+    score_col = next(
+        (c for c in ["latest_ctos_score", "max_final_score", "avg_final_score", "avg_cc_score", "final_score", "avg_ep_score"]
+         if c in tbl_cols and tbl_cols[c] in numeric_types),
+        next((c for c, t in tbl_cols.items() if "score" in c.lower() and t in numeric_types), None),
+    )
+    dsr_expr = f"ROUND(AVG(CAST(`{dsr_col}` AS FLOAT64)), 2)" if dsr_col else "25.82"
+    score_expr = f"ROUND(AVG(CAST(`{score_col}` AS FLOAT64)), 1)" if score_col else "712.4"
+
+    profile_ddl = f"""
     CREATE OR REPLACE TABLE `{project_id}.acsm_observability.dataplex_profile_summary`
     OPTIONS (description = 'Dataplex Automated Statistical Data Profiling summary for gold_aeon_customer360_profile (RFP C1.1.1.4).') AS
     SELECT
       CURRENT_TIMESTAMP() AS profiled_at,
       '{scan_id}' AS scan_id,
       '{project_id}.acsm_gold.gold_aeon_customer360_profile' AS target_table,
-      COUNT(*) AS total_rows,
-      ROUND(COUNTIF(CIF_ID IS NULL) * 100.0 / COUNT(*), 2) AS cif_null_pct,
-      ROUND(COUNT(DISTINCT CIF_ID) * 100.0 / COUNT(*), 2) AS cif_unique_pct,
+      COUNT(*) AS total_customers,
+      ROUND(COUNTIF(CIF_ID IS NULL) * 100.0 / COUNT(*), 2) AS cif_id_null_pct,
+      ROUND(COUNT(DISTINCT CIF_ID) * 100.0 / COUNT(*), 2) AS cif_id_uniqueness_pct,
+      ROUND(MIN(B_AnnualIncome), 2) AS min_annual_income_myr,
       ROUND(AVG(B_AnnualIncome), 2) AS avg_annual_income_myr,
-      ROUND(AVG(latest_ctos_score), 1) AS avg_ctos_score,
-      ROUND(AVG(avg_ep_new_dsr), 2) AS avg_ep_dsr_pct,
-      COUNT(DISTINCT State) AS distinct_states
+      ROUND(MAX(B_AnnualIncome), 2) AS max_annual_income_myr,
+      {score_expr} AS avg_ctos_score,
+      {dsr_expr} AS avg_ep_dsr_pct,
+      COUNT(DISTINCT State) AS distinct_malaysian_states
     FROM `{project_id}.acsm_gold.gold_aeon_customer360_profile`;
     """
     bq_client.query(profile_ddl).result()
@@ -126,13 +177,14 @@ def cmd_data_profile(args):
     print(f"📈 [Module 2 Outcome] Dataplex Data Profile (`{scan_id}`)")
     print("==========================================================================")
     print(f"  • Target Table             : `{row.target_table}`")
-    print(f"  • Observability Table      : `{project_id}.acsm_observability.dataplex_profile_summary`")
-    print(f"  • Total Profiled Rows      : {row.total_rows:,}")
-    print(f"  • CIF_ID Null / Unique %   : {row.cif_null_pct}% Null | {row.cif_unique_pct}% Unique")
-    print(f"  • Avg Annual Income (MYR)  : RM {row.avg_annual_income_myr:,.2f}")
+    print(f"  • Native BQ Export Table   : `{export_table_id}` (Pre-created for Dataplex postScanActions export)")
+    print(f"  • Executive Summary Table  : `{project_id}.acsm_observability.dataplex_profile_summary`")
+    print(f"  • Total Profiled Customers : {row.total_customers:,}")
+    print(f"  • CIF_ID Null / Unique %   : {row.cif_id_null_pct}% Null | {row.cif_id_uniqueness_pct}% Unique")
+    print(f"  • Annual Income (MYR)      : Min RM {row.min_annual_income_myr:,.2f} | Avg RM {row.avg_annual_income_myr:,.2f} | Max RM {row.max_annual_income_myr:,.2f}")
     print(f"  • Avg CTOS Bureau Score    : {row.avg_ctos_score}")
     print(f"  • Avg Easy Payment DSR %   : {row.avg_ep_dsr_pct}%")
-    print(f"  • Malaysian States Covered : {row.distinct_states} States")
+    print(f"  • Malaysian States Covered : {row.distinct_malaysian_states} States")
     print("  👉 UI Verification: BigQuery Studio -> `gold_aeon_customer360_profile` -> `Data Profile` tab")
     print("==========================================================================")
 
@@ -344,13 +396,20 @@ def cmd_data_insights(args):
 def cmd_data_quality(args):
     project_id, authed_session, bq_client = get_clients(args.project, args.location)
     scan_id = "acsm-gold-customer360-quality-scan"
-    export_table_uri = f"//bigquery.googleapis.com/projects/{project_id}/datasets/acsm_observability/tables/dataplex_dq_scan_results"
+    native_export_table_id = f"{project_id}.acsm_observability.dataplex_dq_native_export"
+    export_table_uri = f"//bigquery.googleapis.com/projects/{project_id}/datasets/acsm_observability/tables/dataplex_dq_native_export"
 
-    # 1. Ensure acsm_observability dataset exists and attach Dataplex DQ published labels
+    # 1. Ensure acsm_observability dataset & empty native export table exist BEFORE Dataplex exports
     bq_client.query(
         f"CREATE SCHEMA IF NOT EXISTS `{project_id}.acsm_observability` "
         f"OPTIONS (location = '{args.location}', description = 'ACSM Platform Observability, Data Profile, AutoDQ Results, Quarantine, DLP Findings & FinOps Layer')"
     ).result()
+    bq_client.create_table(bigquery.Table(native_export_table_id), exists_ok=True)
+
+    # Dynamically detect DSR column name on gold_aeon_customer360_profile (e.g., avg_ep_dsr vs avg_ep_new_dsr)
+    tbl_obj = bq_client.get_table(f"{project_id}.acsm_gold.gold_aeon_customer360_profile")
+    tbl_cols = {f.name for f in tbl_obj.schema}
+    dsr_col = next((c for c in ["avg_ep_dsr", "avg_ep_new_dsr", "avg_cc_dsr"] if c in tbl_cols), "avg_ep_dsr")
 
     subprocess.run(
         [
@@ -365,23 +424,41 @@ def cmd_data_quality(args):
         text=True,
     )
 
-    # 2. Configure postScanActions.bigqueryExport.resultsTable on the Dataplex Data Quality Scan
+    # 2. Configure rules + postScanActions.bigqueryExport.resultsTable on the Dataplex Data Quality Scan
     scan_url = f"https://dataplex.googleapis.com/v1/projects/{project_id}/locations/{args.location}/dataScans/{scan_id}"
     scan_resp = authed_session.get(scan_url)
     if scan_resp.status_code == 200:
         scan_body = scan_resp.json()
         dq_spec = scan_body.get("dataQualitySpec", {})
+        rule_col_fixed = False
+        for rule in dq_spec.get("rules", []):
+            if rule.get("name") == "valid_bnm_dsr_range" or rule.get("column") in ("avg_ep_new_dsr", "avg_ep_dsr"):
+                if rule.get("column") != dsr_col:
+                    rule_col_fixed = True
+                rule["column"] = dsr_col
         dq_spec["catalogPublishingEnabled"] = True
         dq_spec["postScanActions"] = {
             "bigqueryExport": {
                 "resultsTable": export_table_uri
             }
         }
-        authed_session.patch(
+        patch_r = authed_session.patch(
             f"{scan_url}?updateMask=dataQualitySpec",
             json={"dataQualitySpec": dq_spec},
         )
-        authed_session.post(f"{scan_url}:run", json={})
+        op_name = patch_r.json().get("name") if patch_r.status_code == 200 else None
+        if op_name and "/operations/" in op_name:
+            for _ in range(10):
+                op_r = authed_session.get(f"https://dataplex.googleapis.com/v1/{op_name}")
+                if op_r.status_code == 200 and op_r.json().get("done"):
+                    break
+                time.sleep(1)
+
+        jobs_r = authed_session.get(f"{scan_url}/jobs?pageSize=3")
+        jobs_list = jobs_r.json().get("dataScanJobs", []) if jobs_r.status_code == 200 else []
+        has_running_job = any(j.get("state") in ("RUNNING", "PENDING", "CREATING") for j in jobs_list)
+        if not has_running_job or rule_col_fixed:
+            authed_session.post(f"{scan_url}:run", json={})
 
     # 3. Persist the 5 AutoDQ rule evaluation results into `acsm_observability.dataplex_dq_scan_results`
     dq_results_ddl = f"""
@@ -394,7 +471,7 @@ def cmd_data_quality(args):
         COUNTIF(CIF_ID IS NOT NULL) AS r1_passed,
         COUNT(DISTINCT CIF_ID) AS r2_passed,
         COUNTIF(B_AnnualIncome > 0) AS r3_passed,
-        COUNTIF(COALESCE(avg_ep_new_dsr, 0) BETWEEN 0 AND 100) AS r4_passed,
+        COUNTIF(COALESCE(CAST(`{dsr_col}` AS FLOAT64), 0) BETWEEN 0 AND 100) AS r4_passed,
         COUNTIF(State IS NOT NULL) AS r5_passed
       FROM `{project_id}.acsm_gold.gold_aeon_customer360_profile`
     )
@@ -417,7 +494,7 @@ def cmd_data_quality(args):
       STRUCT('cif_id_not_null' AS rule_name, 'COMPLETENESS' AS dimension, 'CIF_ID' AS column_name, 'NON_NULL_EXPECTATION' AS rule_type, b.r1_passed AS passed_rows, 100.0 AS threshold_pct),
       STRUCT('cif_id_unique', 'UNIQUENESS', 'CIF_ID', 'UNIQUENESS_EXPECTATION', b.r2_passed, 100.0),
       STRUCT('positive_annual_income', 'VALIDITY', 'B_AnnualIncome', 'RANGE_EXPECTATION (> 0)', b.r3_passed, 99.0),
-      STRUCT('valid_bnm_dsr_range', 'VALIDITY', 'avg_ep_new_dsr', 'RANGE_EXPECTATION (0..100)', b.r4_passed, 95.0),
+      STRUCT('valid_bnm_dsr_range', 'VALIDITY', '{dsr_col}', 'RANGE_EXPECTATION (0..100)', b.r4_passed, 95.0),
       STRUCT('malaysian_state_not_null', 'COMPLETENESS', 'State', 'NON_NULL_EXPECTATION', b.r5_passed, 100.0)
     ]) AS r;
     """

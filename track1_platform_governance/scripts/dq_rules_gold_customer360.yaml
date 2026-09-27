@@ -20,7 +20,7 @@ rules:
     name: positive_annual_income
     description: "Annual income in MYR must be strictly greater than 0."
     threshold: 0.99
-  - column: avg_ep_new_dsr
+  - column: avg_ep_dsr
     dimension: VALIDITY
     rangeExpectation:
       minValue: "0"

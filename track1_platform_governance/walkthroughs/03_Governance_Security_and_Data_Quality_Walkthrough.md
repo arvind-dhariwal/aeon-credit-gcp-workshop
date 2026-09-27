@@ -39,7 +39,7 @@ Before running the Dataplex AutoDQ scan in **Module 4.2**, **Module 4.1** explic
 - **`cif_id_not_null`** (`COMPLETENESS`, `threshold: 1.0`): `CIF_ID` must be non-null.
 - **`cif_id_unique`** (`UNIQUENESS`, `threshold: 1.0`): `CIF_ID` must be 100% unique.
 - **`positive_annual_income`** (`VALIDITY`, `threshold: 0.99`): `B_AnnualIncome` must be strictly `> 0`.
-- **`valid_bnm_dsr_range`** (`VALIDITY`, `threshold: 0.95`): `avg_ep_new_dsr` must fall within `[0, 100]`.
+- **`valid_bnm_dsr_range`** (`VALIDITY`, `threshold: 0.95`): `avg_ep_dsr` must fall within `[0, 100]`.
 - **`malaysian_state_not_null`** (`COMPLETENESS`, `threshold: 1.0`): `State` must be non-null for Row-Level Security (RLS).
 
 ---
