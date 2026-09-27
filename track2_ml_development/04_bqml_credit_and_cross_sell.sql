@@ -1,63 +1,132 @@
 -- =============================================================================
--- TRACK 2: AGENTIC DATA SCIENCE & END-TO-END BIGQUERY ML (BQML + SQL GRAPH RAG)
--- File: 04_bqml_credit_and_cross_sell.sql
+-- TRACK 2: AGENTIC DATA SCIENCE & FAST END-TO-END BIGQUERY ML (EP-TO-CC CROSS-SELL PIPELINE)
+-- File: sql/04_bqml_credit_and_cross_sell.sql
 -- Region: asia-southeast1 (Singapore)
 --
--- Fulfils ACSM RFP Clauses C1.1.4.1–C1.1.4.10, C1.1.3.1, C1.1.3.6 & Annexure M1.5.1:
--- 1. Module 1: Governed Feature Store + Property Graph Contagion Features (`acsm_gold.ml_customer_feature_store`)
--- 2. Module 2: Unsupervised Customer Segmentation (`acsm_gold.model_customer_rfm_kmeans`)
--- 3. Module 3: Supervised Credit Delinquency & Cross-Sell Models in Vertex AI Model Registry
---              (`acsm_gold.model_delinquency_propensity`, `acsm_gold.model_ep_to_cc_cross_sell`)
--- 4. Module 4: Explainable AI (`ML.EVALUATE`, `ML.GLOBAL_EXPLAIN`, `ML.EXPLAIN_PREDICT` Local SHAP)
--- 5. Module 5: In-Warehouse SQL Graph RAG Knowledge Base (`acsm_gold.bnm_rmit_akpk_policy_kb`)
+-- Fulfils ACSM RFP Clauses C1.1.4.1–C1.1.4.10, C1.1.3.1, C1.1.3.8 & Annexure M1.5.1:
+-- 1. Module 1: Governed Customer 360 Feature Store (`acsm_gold.ml_customer_feature_store`)
+-- 2. Module 2: Supervised EP -> CC Cross-Sell Model in Vertex AI Model Registry (`acsm_gold.model_ep_to_cc_cross_sell`)
+-- 3. Module 3: Explainable AI (`ML.EVALUATE`, `ML.GLOBAL_EXPLAIN`, `ML.EXPLAIN_PREDICT` Local SHAP)
 -- =============================================================================
 
 -- -----------------------------------------------------------------------------
--- MODULE 1: Governed Feature Store + Graph Contagion Features (Clause C1.1.4.2)
--- Combines `acsm_gold.gold_aeon_customer360_profile` (100,000 customers) with
--- network contagion features extracted via ISO GQL `GRAPH_TABLE` from
--- `acsm_gold.acsm_credit_ecosystem_graph`.
+-- MODULE 0: Ensure `acsm_gold.gold_aeon_customer360_profile` Has Full Standardized Schema
+-- (Self-healing even if Dataform created a subset of columns in Track 1)
+-- -----------------------------------------------------------------------------
+CREATE SCHEMA IF NOT EXISTS `acsm_gold`
+OPTIONS (location = 'asia-southeast1');
+
+CREATE OR REPLACE TABLE `acsm_gold.gold_aeon_customer360_profile`
+CLUSTER BY State, CIF_ID
+OPTIONS (
+  description = 'Gold AEON 360 Customer Risk, Affordability & Credit Exposure Feature Store joining CIF, EP Underwriting, CC Underwriting, Collections, and Card Utilization.'
+) AS
+WITH silver_cif AS (
+  SELECT
+    CAST(CIF_ID AS STRING) AS CIF_ID,
+    TRIM(CAST(CIF_NM AS STRING)) AS CIF_NM,
+    TRIM(CAST(State AS STRING)) AS State,
+    TRIM(CAST(Region AS STRING)) AS Region,
+    TRIM(CAST(Occupation AS STRING)) AS Occupation,
+    CAST(N_Age AS INT64) AS N_Age,
+    CAST(B_NetIncome AS NUMERIC) AS B_NetIncome,
+    CAST(B_AnnualIncome AS NUMERIC) AS B_AnnualIncome,
+    COALESCE(TRIM(CAST(RecvPromo_FG AS STRING)), 'N') AS RecvPromo_FG
+  FROM `acsm_bronze.m3CIF`
+  QUALIFY ROW_NUMBER() OVER (PARTITION BY CAST(CIF_ID AS STRING) ORDER BY Rcd_DT DESC) = 1
+),
+ep_agg AS (
+  SELECT
+    CAST(CIF_NO AS STRING) AS CIF_ID,
+    COUNT(*) AS ep_app_count,
+    ROUND(SUM(COALESCE(CAST(FIN_AMT AS NUMERIC), 0)), 2) AS total_ep_financed_myr,
+    ROUND(AVG(CAST(NEW_DSR AS NUMERIC)), 2) AS avg_ep_dsr
+  FROM `acsm_bronze.Fact_EP_Judge`
+  GROUP BY 1
+),
+cc_agg AS (
+  SELECT
+    CAST(CIF_ID AS STRING) AS CIF_ID,
+    COUNT(*) AS cc_app_count,
+    ROUND(SUM(COALESCE(CAST(B_CrLimit AS NUMERIC), 0)), 2) AS total_cc_limit_myr,
+    MAX(CAST(Final_Score AS NUMERIC)) AS latest_ctos_score
+  FROM `acsm_bronze.Fact_CC_Judge`
+  GROUP BY 1
+),
+ep_col AS (
+  SELECT
+    CAST(CIF_No AS STRING) AS CIF_ID,
+    SUM(CAST(Unpaid_OSP AS NUMERIC)) AS total_ep_unpaid_osp,
+    MAX(TRIM(CAST(Score_Grade AS STRING))) AS ep_worst_grade
+  FROM `acsm_bronze.Fact_EP_Collection`
+  GROUP BY 1
+),
+cc_col AS (
+  SELECT
+    CAST(CIF_No AS STRING) AS CIF_ID,
+    SUM(CAST(Unpaid_OSP AS NUMERIC)) AS total_cc_unpaid_osp,
+    MAX(TRIM(CAST(Score_Grade AS STRING))) AS cc_worst_grade
+  FROM `acsm_bronze.Fact_CC_Collection`
+  GROUP BY 1
+),
+col_agg AS (
+  SELECT
+    COALESCE(ep.CIF_ID, cc.CIF_ID) AS CIF_ID,
+    COALESCE(ep.total_ep_unpaid_osp, 0) AS total_ep_unpaid_osp,
+    COALESCE(cc.total_cc_unpaid_osp, 0) AS total_cc_unpaid_osp,
+    COALESCE(ep.total_ep_unpaid_osp, 0) + COALESCE(cc.total_cc_unpaid_osp, 0) AS combined_unpaid_osp,
+    GREATEST(COALESCE(ep.ep_worst_grade, 'A'), COALESCE(cc.cc_worst_grade, 'A')) AS worst_collection_score_grade
+  FROM ep_col ep
+  FULL OUTER JOIN cc_col cc
+    ON ep.CIF_ID = cc.CIF_ID
+),
+card_agg AS (
+  SELECT
+    CAST(CIF_ID AS STRING) AS CIF_ID,
+    COUNTIF(TRIM(CAST(Card_Status AS STRING)) = 'Active') AS active_card_count,
+    ROUND(SUM(CAST(CP_CL_Usage AS NUMERIC)), 2) AS total_cp_usage_myr,
+    ROUND(SUM(CAST(CP_CL_Available AS NUMERIC)), 2) AS total_cp_available_myr
+  FROM `acsm_bronze.dimProduct`
+  GROUP BY 1
+)
+SELECT
+  c.CIF_ID,
+  c.CIF_NM,
+  c.State,
+  c.Region,
+  c.Occupation,
+  c.N_Age,
+  c.B_NetIncome,
+  c.B_AnnualIncome,
+  c.RecvPromo_FG,
+  COALESCE(ep.ep_app_count, 0) AS ep_app_count,
+  COALESCE(ep.total_ep_financed_myr, 0) AS total_ep_financed_myr,
+  ep.avg_ep_dsr,
+  COALESCE(cc.cc_app_count, 0) AS cc_app_count,
+  COALESCE(cc.total_cc_limit_myr, 0) AS total_cc_limit_myr,
+  cc.latest_ctos_score,
+  COALESCE(col.total_ep_unpaid_osp, 0) AS total_ep_unpaid_osp,
+  COALESCE(col.total_cc_unpaid_osp, 0) AS total_cc_unpaid_osp,
+  COALESCE(col.combined_unpaid_osp, 0) AS combined_unpaid_osp,
+  COALESCE(col.worst_collection_score_grade, 'NONE') AS worst_collection_score_grade,
+  COALESCE(crd.active_card_count, 0) AS active_card_count,
+  COALESCE(crd.total_cp_usage_myr, 0) AS total_cp_usage_myr,
+  COALESCE(crd.total_cp_available_myr, 0) AS total_cp_available_myr
+FROM silver_cif c
+LEFT JOIN ep_agg ep USING (CIF_ID)
+LEFT JOIN cc_agg cc USING (CIF_ID)
+LEFT JOIN col_agg col USING (CIF_ID)
+LEFT JOIN card_agg crd USING (CIF_ID);
+
+-- -----------------------------------------------------------------------------
+-- MODULE 1: Governed Customer 360 Feature Store (Clause C1.1.4.2)
+-- Builds `acsm_gold.ml_customer_feature_store` from `acsm_gold.gold_aeon_customer360_profile`
 -- -----------------------------------------------------------------------------
 CREATE OR REPLACE TABLE `acsm_gold.ml_customer_feature_store`
 CLUSTER BY State, CIF_ID
 OPTIONS (
-  description = 'Governed ACSM ML Feature Store combining Customer 360 demographics, EP/CC underwriting, DSR, CTOS score, and Property Graph merchant contagion features (Clause C1.1.4.2).'
+  description = 'Governed ACSM ML Feature Store for performing customers from Customer 360 demographics, income, EP underwriting, DSR, and CTOS score (Clause C1.1.4.2).'
 ) AS
-WITH high_risk_merchants AS (
-  SELECT
-    merchant_id,
-    COUNT(DISTINCT delinq_cif_id) AS delinquent_shoppers_at_merchant
-  FROM GRAPH_TABLE(
-    `acsm_gold.acsm_credit_ecosystem_graph`
-    MATCH (dc:Customer)-[t:TRANSACTED_AT]->(m:Merchant)
-    WHERE dc.is_delinquent = TRUE
-    COLUMNS (
-      m.merchant_id AS merchant_id,
-      dc.cif_id AS delinq_cif_id
-    )
-  )
-  GROUP BY merchant_id
-  HAVING COUNT(DISTINCT delinq_cif_id) >= 5
-),
-customer_graph_contagion AS (
-  SELECT
-    g.cif_id,
-    COUNT(DISTINCT hrm.merchant_id) AS delinquent_exposed_merchants,
-    COALESCE(SUM(hrm.delinquent_shoppers_at_merchant), 0) AS shared_delinquent_peers_count,
-    ROUND(SUM(g.total_spend_myr), 2) AS total_graph_merchant_spend_myr
-  FROM GRAPH_TABLE(
-    `acsm_gold.acsm_credit_ecosystem_graph`
-    MATCH (c:Customer)-[t:TRANSACTED_AT]->(m:Merchant)
-    COLUMNS (
-      c.cif_id AS cif_id,
-      m.merchant_id AS merchant_id,
-      t.total_spend_myr AS total_spend_myr
-    )
-  ) g
-  LEFT JOIN high_risk_merchants hrm
-    ON g.merchant_id = hrm.merchant_id
-  GROUP BY g.cif_id
-)
 SELECT
   p.CIF_ID,
   p.CIF_NM,
@@ -71,95 +140,22 @@ SELECT
   CAST(COALESCE(p.ep_app_count, 0) AS INT64) AS ep_app_count,
   CAST(COALESCE(p.total_ep_financed_myr, 0) AS FLOAT64) AS total_ep_financed_myr,
   CAST(COALESCE(p.avg_ep_dsr, 30.0) AS FLOAT64) AS avg_ep_dsr,
-  CAST(COALESCE(p.cc_app_count, 0) AS INT64) AS cc_app_count,
-  CAST(COALESCE(p.total_cc_limit_myr, 0) AS FLOAT64) AS total_cc_limit_myr,
   CAST(COALESCE(p.latest_ctos_score, 650) AS FLOAT64) AS latest_ctos_score,
   CAST(COALESCE(p.active_card_count, 0) AS INT64) AS active_card_count,
-  CAST(COALESCE(p.total_cp_usage_myr, 0) AS FLOAT64) AS total_cp_usage_myr,
-  CAST(COALESCE(p.total_cp_available_myr, 0) AS FLOAT64) AS total_cp_available_myr,
-  ROUND(
-    SAFE_DIVIDE(
-      CAST(COALESCE(p.total_cp_usage_myr, 0) AS FLOAT64),
-      NULLIF(CAST(COALESCE(p.total_cp_usage_myr, 0) + COALESCE(p.total_cp_available_myr, 0) AS FLOAT64), 0)
-    ),
-    4
-  ) AS credit_utilization_ratio,
-  CAST(COALESCE(p.combined_unpaid_osp, 0) AS FLOAT64) AS combined_unpaid_osp,
-  COALESCE(p.worst_collection_score_grade, 'NONE') AS worst_collection_score_grade,
-  CAST(COALESCE(cg.delinquent_exposed_merchants, 0) AS INT64) AS delinquent_exposed_merchants,
-  CAST(COALESCE(cg.shared_delinquent_peers_count, 0) AS INT64) AS shared_delinquent_peers_count,
-  CAST(COALESCE(cg.total_graph_merchant_spend_myr, 0) AS FLOAT64) AS total_graph_merchant_spend_myr,
-  IF(COALESCE(p.combined_unpaid_osp, 0) > 0, 1, 0) AS label_is_delinquent,
   IF(COALESCE(p.active_card_count, 0) > 0, 1, 0) AS label_has_credit_card
 FROM `acsm_gold.gold_aeon_customer360_profile` p
-LEFT JOIN customer_graph_contagion cg
-  ON p.CIF_ID = cg.cif_id;
+WHERE COALESCE(p.combined_unpaid_osp, 0) = 0;
 
 -- -----------------------------------------------------------------------------
--- MODULE 2: Unsupervised Customer Segmentation (`KMEANS` — 4 One-AEON Personas)
--- -----------------------------------------------------------------------------
-CREATE OR REPLACE MODEL `acsm_gold.model_customer_rfm_kmeans`
-OPTIONS (
-  model_type = 'KMEANS',
-  num_clusters = 4,
-  standardize_features = TRUE,
-  kmeans_init_method = 'KMEANS++',
-  max_iterations = 10
-) AS
-SELECT
-  N_Age,
-  B_NetIncome,
-  avg_ep_dsr,
-  latest_ctos_score,
-  total_ep_financed_myr,
-  total_cp_usage_myr,
-  credit_utilization_ratio
-FROM `acsm_gold.ml_customer_feature_store`;
-
--- -----------------------------------------------------------------------------
--- MODULE 3A: Supervised Model 1 — Credit Delinquency & AKPK Propensity
--- Registered directly into Vertex AI Model Registry (Clauses C1.1.4.6, C1.1.4.10)
--- Note: Uses LOGISTIC_REG for fast (~25s) live workshop training with global &
---       local SHAP explainability. Can also be set to BOOSTED_TREE_CLASSIFIER.
--- -----------------------------------------------------------------------------
-CREATE OR REPLACE MODEL `acsm_gold.model_delinquency_propensity`
-OPTIONS (
-  model_type = 'LOGISTIC_REG',
-  input_label_cols = ['label_is_delinquent'],
-  auto_class_weights = TRUE,
-  max_iterations = 10,
-  enable_global_explain = TRUE,
-  model_registry = 'VERTEX_AI',
-  vertex_ai_model_id = 'acsm_delinquency_akpk_propensity_v1'
-) AS
-SELECT
-  N_Age,
-  State,
-  Occupation,
-  B_NetIncome,
-  B_AnnualIncome,
-  ep_app_count,
-  total_ep_financed_myr,
-  avg_ep_dsr,
-  cc_app_count,
-  total_cc_limit_myr,
-  latest_ctos_score,
-  credit_utilization_ratio,
-  delinquent_exposed_merchants,
-  shared_delinquent_peers_count,
-  label_is_delinquent
-FROM `acsm_gold.ml_customer_feature_store`;
-
--- -----------------------------------------------------------------------------
--- MODULE 3B: Supervised Model 2 — Easy Payment (EP) -> Credit Card (CC) Cross-Sell
--- Registered directly into Vertex AI Model Registry (Annexure M1.5.1)
+-- MODULE 2: Supervised Model — Easy Payment (EP) -> Credit Card (CC) Cross-Sell
+-- Registered directly into Vertex AI Model Registry (Clauses C1.1.4.6, C1.1.4.10, M1.5.1)
 -- -----------------------------------------------------------------------------
 CREATE OR REPLACE MODEL `acsm_gold.model_ep_to_cc_cross_sell`
 OPTIONS (
   model_type = 'LOGISTIC_REG',
   input_label_cols = ['label_has_credit_card'],
   auto_class_weights = TRUE,
-  max_iterations = 10,
+  max_iterations = 5,
   enable_global_explain = TRUE,
   model_registry = 'VERTEX_AI',
   vertex_ai_model_id = 'acsm_ep_to_cc_cross_sell_v1'
@@ -174,145 +170,52 @@ SELECT
   total_ep_financed_myr,
   avg_ep_dsr,
   latest_ctos_score,
-  total_graph_merchant_spend_myr,
   label_has_credit_card
-FROM `acsm_gold.ml_customer_feature_store`
-WHERE label_is_delinquent = 0;
+FROM `acsm_gold.ml_customer_feature_store`;
 
 -- -----------------------------------------------------------------------------
--- MODULE 4: Batch Explainable Predictions Table (`ML.EXPLAIN_PREDICT` Local SHAP)
--- Combines Delinquency Risk Probability + Top 3 Local SHAP Feature Attributions
--- with EP -> CC Cross-Sell Propensity Probability across all 100,000 customers.
+-- MODULE 3: Explainable AI Predictions (`ML.EXPLAIN_PREDICT` Local SHAP)
+-- Top 15 Pre-Qualified Easy Payment Customers for AEON Credit Card Cross-Sell
 -- -----------------------------------------------------------------------------
-CREATE OR REPLACE TABLE `acsm_gold.ml_customer_risk_and_cross_sell_scores`
-CLUSTER BY State, CIF_ID
-OPTIONS (
-  description = 'Pre-computed Explainable ML Delinquency Risk & EP-to-CC Cross-Sell Propensity scores with Top 3 Local SHAP feature attributions per customer (Clauses C1.1.4.4, C1.1.4.9, M1.5.1).'
-) AS
-WITH delinq_explain AS (
-  SELECT
-    CIF_ID,
-    CIF_NM,
-    State,
-    Region,
-    Occupation,
-    N_Age,
-    B_NetIncome,
-    avg_ep_dsr,
-    latest_ctos_score,
-    total_ep_financed_myr,
-    total_cc_limit_myr,
-    active_card_count,
-    credit_utilization_ratio,
-    combined_unpaid_osp,
-    worst_collection_score_grade,
-    RecvPromo_FG,
-    delinquent_exposed_merchants,
-    shared_delinquent_peers_count,
-    label_is_delinquent,
-    predicted_label_is_delinquent AS predicted_delinquency_flag,
-    ROUND(probability, 4) AS delinquency_risk_probability,
-    top_feature_attributions,
-    CONCAT(
-      top_feature_attributions[SAFE_OFFSET(0)].feature, ' (',
-      CAST(ROUND(top_feature_attributions[SAFE_OFFSET(0)].attribution, 3) AS STRING), ')'
-    ) AS top_1_shap_reason,
-    CONCAT(
-      top_feature_attributions[SAFE_OFFSET(1)].feature, ' (',
-      CAST(ROUND(top_feature_attributions[SAFE_OFFSET(1)].attribution, 3) AS STRING), ')'
-    ) AS top_2_shap_reason,
-    CONCAT(
-      top_feature_attributions[SAFE_OFFSET(2)].feature, ' (',
-      CAST(ROUND(top_feature_attributions[SAFE_OFFSET(2)].attribution, 3) AS STRING), ')'
-    ) AS top_3_shap_reason
-  FROM ML.EXPLAIN_PREDICT(
-    MODEL `acsm_gold.model_delinquency_propensity`,
-    TABLE `acsm_gold.ml_customer_feature_store`,
-    STRUCT(3 AS top_k_features)
-  )
-),
-cross_sell_pred AS (
-  SELECT
-    CIF_ID,
-    predicted_label_has_credit_card AS predicted_cc_cross_sell_flag,
-    ROUND(
-      (SELECT p.prob FROM UNNEST(predicted_label_has_credit_card_probs) p WHERE p.label = 1),
-      4
-    ) AS cc_cross_sell_probability
-  FROM ML.PREDICT(
-    MODEL `acsm_gold.model_ep_to_cc_cross_sell`,
-    TABLE `acsm_gold.ml_customer_feature_store`
-  )
-)
 SELECT
-  d.*,
-  cs.predicted_cc_cross_sell_flag,
-  cs.cc_cross_sell_probability
-FROM delinq_explain d
-LEFT JOIN cross_sell_pred cs
-  USING (CIF_ID);
-
--- -----------------------------------------------------------------------------
--- MODULE 5: Regulatory & Product Policy Knowledge Base (`acsm_gold.bnm_rmit_akpk_policy_kb_autonomous`)
--- Uses Autonomous Embedding Generation (`GENERATED ALWAYS AS (AI.EMBED(...)) STORED OPTIONS(asynchronous = TRUE)`)
--- so BigQuery automatically embeds rows for zero-pipeline `AI.SEARCH` queries, plus `bnm_rmit_akpk_policy_kb`
--- for synchronous `VECTOR_SEARCH` + `GRAPH_TABLE` + `ML.GENERATE_TEXT` SQL Graph RAG.
--- -----------------------------------------------------------------------------
-CREATE OR REPLACE TABLE `acsm_gold.bnm_rmit_akpk_policy_kb_autonomous` (
-  policy_id STRING,
-  policy_title STRING,
-  category STRING,
-  content STRING,
-  content_embedding STRUCT<result ARRAY<FLOAT64>, status STRING>
-    GENERATED ALWAYS AS (
-      AI.EMBED(
-        content,
-        connection_id => 'asia-southeast1.acsm_vertex_genai_conn',
-        endpoint => 'text-embedding-005'
-      )
-    )
-    STORED OPTIONS (asynchronous = TRUE)
+  CIF_ID,
+  CIF_NM,
+  State,
+  Occupation,
+  B_NetIncome,
+  ep_app_count,
+  total_ep_financed_myr,
+  avg_ep_dsr,
+  latest_ctos_score,
+  RecvPromo_FG AS pdpa_consent,
+  ROUND(probability, 4) AS cc_cross_sell_probability,
+  CONCAT(
+    top_feature_attributions[SAFE_OFFSET(0)].feature, ' (',
+    CAST(ROUND(top_feature_attributions[SAFE_OFFSET(0)].attribution, 3) AS STRING), ')'
+  ) AS top_1_shap_reason,
+  CONCAT(
+    top_feature_attributions[SAFE_OFFSET(1)].feature, ' (',
+    CAST(ROUND(top_feature_attributions[SAFE_OFFSET(1)].attribution, 3) AS STRING), ')'
+  ) AS top_2_shap_reason,
+  CONCAT(
+    top_feature_attributions[SAFE_OFFSET(2)].feature, ' (',
+    CAST(ROUND(top_feature_attributions[SAFE_OFFSET(2)].attribution, 3) AS STRING), ')'
+  ) AS top_3_shap_reason,
+  CASE
+    WHEN B_NetIncome >= 8000 AND latest_ctos_score >= 700 THEN 'AEON Platinum Visa (Fast-Track)'
+    WHEN B_NetIncome >= 4000 AND latest_ctos_score >= 660 THEN 'AEON Gold Visa (Fast-Track)'
+    ELSE 'AEON Classic Rewards Card'
+  END AS recommended_card_offer
+FROM ML.EXPLAIN_PREDICT(
+  MODEL `acsm_gold.model_ep_to_cc_cross_sell`,
+  (
+    SELECT *
+    FROM `acsm_gold.ml_customer_feature_store`
+    WHERE active_card_count = 0
+      AND ep_app_count > 0
+      AND RecvPromo_FG = 'Y'
+  ),
+  STRUCT(3 AS top_k_features)
 )
-OPTIONS (
-  description = 'Autonomous Embedding Knowledge Base where BigQuery automatically maintains content_embedding via AI.EMBED for zero-pipeline AI.SEARCH queries (Clause C1.1.3.6).'
-);
-
-INSERT INTO `acsm_gold.bnm_rmit_akpk_policy_kb_autonomous` (policy_id, policy_title, category, content)
-VALUES
-  (
-    'POL-BNM-RMIT-10.55',
-    'BNM RMiT Sec 10.55 & Responsible Financing DSR > 60% Control',
-    'Regulatory & Affordability',
-    'Under Bank Negara Malaysia (BNM) Risk Management in Technology (RMiT) and Responsible Financing Guidelines, customers with Debt Service Ratio (DSR) exceeding 60% or high credit utilization ratio (> 80%) must be restricted from automatic credit limit increases and routed for proactive affordability review with documented SHAP feature attributions.'
-  ),
-  (
-    'POL-AKPK-DMP-01',
-    'AKPK Debt Management Programme (DMP) & Early Tenure Restructuring',
-    'Collections & Restructuring',
-    'Customers flagged with high delinquency propensity (probability >= 0.65), Collection Score Grade D/E, or Unpaid_OSP > RM 1,000 qualify for proactive AEON Early Restructuring or AKPK Debt Management Programme (DMP) referral: freeze new Cash Advance drawdowns and offer a 36-to-60 month installment conversion at <= 6.0% p.a. subject to 3 consecutive monthly payments.'
-  ),
-  (
-    'POL-GRAPH-CONTAGION-03',
-    'Merchant & Shared-Network Delinquency Contagion Ring Protocol',
-    'Fraud & Network Risk',
-    'When BigQuery Property Graph traversal identifies a high-risk customer transacting across merchants with elevated delinquent peer clusters (delinquent_exposed_merchants >= 1), Credit Control officers must review linked Easy Payment (EP) and Credit Card (CC) facilities simultaneously and verify merchant settlement authenticity before approving restructuring.'
-  ),
-  (
-    'POL-ACSM-CROSSSELL-02',
-    'One-AEON Easy Payment (EP) to Gold/Platinum Credit Card Fast-Track Policy',
-    'Underwriting & Cross-Sell',
-    'Performing Easy Payment (EP) customers with zero unpaid delinquency (Unpaid_OSP = 0), DSR <= 50%, CTOS Score >= 660, and active PDPA marketing consent (RecvPromo_FG = Y) who hold zero AEON Credit Cards (active_card_count = 0) qualify for pre-approved AEON Gold/Platinum Credit Card issuance with instant reward points at AEON Privilege Merchants.'
-  ),
-  (
-    'POL-PDPA-2010-SEC43',
-    'Malaysian PDPA 2010 Section 43 Consent & Fair Lending Explainability',
-    'Data Privacy & Fair Lending',
-    'Personal data (CIF_NM, Net Income) must be protected under Malaysian PDPA 2010, and marketing outreach is strictly restricted to customers with RecvPromo_FG = Y. All automated ML credit risk and restructuring recommendations must log their top SHAP feature attributions and exclude protected demographic attributes.'
-  );
-
-CREATE OR REPLACE TABLE `acsm_gold.bnm_rmit_akpk_policy_kb`
-OPTIONS (
-  description = 'Managed BigQuery Vector Knowledge Base storing BNM RMiT, Responsible Financing (DSR > 60%), AKPK DMP Restructuring, and One-AEON Cross-Sell Policy clauses for SQL Graph RAG (Clause C1.1.3.6).'
-) AS
-SELECT policy_id, policy_title, category, content
-FROM `acsm_gold.bnm_rmit_akpk_policy_kb_autonomous`;
+ORDER BY probability DESC, B_NetIncome DESC
+LIMIT 15;
