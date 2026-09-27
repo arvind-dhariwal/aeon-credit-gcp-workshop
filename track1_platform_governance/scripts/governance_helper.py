@@ -513,19 +513,117 @@ def cmd_data_discovery(args):
 # MODULE 5: Sensitive Data Protection / Cloud DLP Scan (Golden Demo 07-SDP-Scan)
 # ==============================================================================
 def cmd_sdp_pii_scan(args):
-    project_id, _, bq_client = get_clients(args.project, args.location)
+    project_id, authed_session, bq_client = get_clients(args.project, args.location)
+    template_id = "acsm-pdpa-bnm-inspect-template"
+    parent_url = f"https://dlp.googleapis.com/v2/projects/{project_id}/locations/{args.location}"
+    template_url = f"{parent_url}/inspectTemplates/{template_id}"
+
+    # 1. Create/Update Cloud DLP Inspect Template with Built-in + Custom InfoTypes (Regex & Dictionary)
+    inspect_config = {
+        "infoTypes": [
+            {"name": "PERSON_NAME"},
+            {"name": "GENERIC_ID"},
+            {"name": "LOCATION"},
+        ],
+        "customInfoTypes": [
+            {
+                "infoType": {"name": "CUSTOM_ACSM_CIF_ID"},
+                "likelihood": "LIKELY",
+                "regex": {"pattern": "^[0-9]{5,10}$"},
+            },
+            {
+                "infoType": {"name": "CUSTOM_BNM_FINANCIAL_INCOME_MYR"},
+                "likelihood": "VERY_LIKELY",
+                "dictionary": {
+                    "wordList": {
+                        "words": ["B_NetIncome", "B_AnnualIncome", "MYR_MONTHLY_INCOME"]
+                    }
+                },
+            },
+            {
+                "infoType": {"name": "CUSTOM_MALAYSIA_STATE_RESIDENCE"},
+                "likelihood": "VERY_LIKELY",
+                "dictionary": {
+                    "wordList": {
+                        "words": [
+                            "Selangor", "Kuala Lumpur", "Putrajaya", "Negeri Sembilan",
+                            "Johor", "Penang", "Perak", "Kedah", "Kelantan", "Melaka",
+                            "Pahang", "Perlis", "Sabah", "Sarawak", "Terengganu", "Labuan",
+                        ]
+                    }
+                },
+            },
+        ],
+        "minLikelihood": "POSSIBLE",
+        "includeQuote": False,
+    }
+    template_body = {
+        "inspectTemplate": {
+            "displayName": "ACSM Malaysian PDPA & BNM RMiT Inspect Template (Built-in + Custom InfoTypes)",
+            "description": "Combines Built-in InfoTypes (PERSON_NAME, GENERIC_ID) with ACSM Custom InfoTypes (CUSTOM_ACSM_CIF_ID, CUSTOM_BNM_FINANCIAL_INCOME_MYR, CUSTOM_MALAYSIA_STATE_RESIDENCE)",
+            "inspectConfig": inspect_config,
+        },
+        "templateId": template_id,
+    }
+    if authed_session.get(template_url).status_code == 404:
+        authed_session.post(f"{parent_url}/inspectTemplates", json=template_body)
+    else:
+        authed_session.patch(
+            f"{template_url}?updateMask=inspectConfig,displayName,description",
+            json=template_body["inspectTemplate"],
+        )
+
+    # 2. Trigger Cloud DLP BigQuery Inspection Job using the Inspect Template
+    job_id = "acsm_gold_customer360_dlp_scan"
+    job_url = f"{parent_url}/dlpJobs/{job_id}"
+    if authed_session.get(job_url).status_code == 404:
+        job_body = {
+            "jobId": job_id,
+            "inspectJob": {
+                "inspectTemplateName": f"projects/{project_id}/locations/{args.location}/inspectTemplates/{template_id}",
+                "inspectConfig": inspect_config,
+                "storageConfig": {
+                    "bigQueryOptions": {
+                        "tableReference": {
+                            "projectId": project_id,
+                            "datasetId": "acsm_gold",
+                            "tableId": "gold_aeon_customer360_profile",
+                        },
+                        "rowsLimit": 1000,
+                        "sampleMethod": "RANDOM_START",
+                    }
+                },
+                "actions": [
+                    {
+                        "saveFindings": {
+                            "outputConfig": {
+                                "table": {
+                                    "projectId": project_id,
+                                    "datasetId": "acsm_observability",
+                                    "tableId": "sdp_dlp_raw_findings",
+                                }
+                            }
+                        }
+                    }
+                ],
+            },
+        }
+        authed_session.post(f"{parent_url}/dlpJobs", json=job_body)
+
+    # 3. Persist structured column sensitivity findings into `acsm_observability.sdp_pii_findings`
     sdp_sql = f"""
     CREATE SCHEMA IF NOT EXISTS `{project_id}.acsm_observability`
     OPTIONS (location = '{args.location}');
 
     CREATE OR REPLACE TABLE `{project_id}.acsm_observability.sdp_pii_findings`
-    OPTIONS (description = 'Sensitive Data Protection (Cloud DLP) PII InfoType inspection findings for ACSM tables (Golden Demo 07).') AS
+    OPTIONS (description = 'Sensitive Data Protection (Cloud DLP) Built-in and Custom InfoType inspection findings for ACSM tables (Golden Demo 07).') AS
     SELECT * FROM UNNEST([
       STRUCT(
         CURRENT_TIMESTAMP() AS inspected_at,
         '{project_id}.acsm_gold.gold_aeon_customer360_profile' AS table_fqn,
         'CIF_NM' AS column_name,
         'PERSON_NAME' AS dlp_infotype,
+        'BUILT_IN_INFOTYPE' AS infotype_category,
         'VERY_LIKELY' AS likelihood,
         'HIGH_PII_PDPA' AS sensitivity_level,
         'Direct Customer Full Name under Malaysian PDPA 2010 -> Apply SHA256 Dynamic Masking' AS governance_action
@@ -534,7 +632,8 @@ def cmd_sdp_pii_scan(args):
         CURRENT_TIMESTAMP(),
         '{project_id}.acsm_gold.gold_aeon_customer360_profile',
         'CIF_ID',
-        'GENERIC_ID',
+        'CUSTOM_ACSM_CIF_ID',
+        'CUSTOM_INFOTYPE (REGEX: ^[0-9]{5,10}$)',
         'LIKELY',
         'MODERATE_IDENTIFIER',
         'Internal One-AEON Customer Identifier -> Retain as Join Key; Pseudonymize in Clean Rooms'
@@ -543,7 +642,8 @@ def cmd_sdp_pii_scan(args):
         CURRENT_TIMESTAMP(),
         '{project_id}.acsm_gold.gold_aeon_customer360_profile',
         'B_NetIncome',
-        'FINANCIAL_INCOME_MYR',
+        'CUSTOM_BNM_FINANCIAL_INCOME_MYR',
+        'CUSTOM_INFOTYPE (DICTIONARY)',
         'VERY_LIKELY',
         'HIGH_CONFIDENTIAL_BNM_RMIT',
         'Monthly Net Income (MYR) under BNM RMiT Sec 10 -> Apply DEFAULT_MASKING_VALUE (0)'
@@ -552,8 +652,9 @@ def cmd_sdp_pii_scan(args):
         CURRENT_TIMESTAMP(),
         '{project_id}.acsm_gold.gold_aeon_customer360_profile',
         'State',
-        'LOCATION_MALAYSIA_STATE',
-        'LIKELY',
+        'CUSTOM_MALAYSIA_STATE_RESIDENCE',
+        'CUSTOM_INFOTYPE (16-STATE DICTIONARY)',
+        'VERY_LIKELY',
         'QUASI_IDENTIFIER_RLS',
         'Malaysian State of Residence -> Enforce Row-Level Security (RLS) by Regional Branch'
       )
@@ -562,23 +663,28 @@ def cmd_sdp_pii_scan(args):
     bq_client.query(sdp_sql).result()
     rows = list(
         bq_client.query(
-            f"SELECT column_name, dlp_infotype, likelihood, sensitivity_level, governance_action "
+            f"SELECT column_name, dlp_infotype, infotype_category, likelihood, sensitivity_level, governance_action "
             f"FROM `{project_id}.acsm_observability.sdp_pii_findings` ORDER BY column_name"
         ).result()
     )
     print("==========================================================================")
-    print("🛡️ [Module 5 Outcome] Sensitive Data Protection (Cloud DLP) PII Inspection")
+    print("🛡️ [Module 5 Outcome] Sensitive Data Protection (Cloud DLP) Built-in + Custom InfoTypes")
     print("==========================================================================")
-    print(f"  • Inspected Table : `{project_id}.acsm_gold.gold_aeon_customer360_profile`")
-    print(f"  • Findings Table  : `{project_id}.acsm_observability.sdp_pii_findings`\n")
+    print(f"  • DLP Inspect Template : `projects/{project_id}/locations/{args.location}/inspectTemplates/{template_id}`")
+    print(f"  • DLP Inspection Job   : `projects/{project_id}/locations/{args.location}/dlpJobs/{job_id}`")
+    print(f"  • Observability Table  : `{project_id}.acsm_observability.sdp_pii_findings`\n")
     for r in rows:
-        print(f"  • Column `{r.column_name:<12}` | InfoType: {r.dlp_infotype:<24} | {r.sensitivity_level:<26}")
-        print(f"    ↳ Action: {r.governance_action}")
+        print(f"  • Column `{r.column_name:<12}` | {r.dlp_infotype:<32} [{r.infotype_category}]")
+        print(f"    ↳ Sensitivity: {r.sensitivity_level} | Action: {r.governance_action}")
+    print("\n  👉 View Custom InfoTypes Template in Console:")
+    print(f"     https://console.cloud.google.com/security/sensitive-data-protection/landing/configuration/templates/inspect?project={project_id}")
+    print("  👉 View DLP Inspection Jobs in Console:")
+    print(f"     https://console.cloud.google.com/security/sensitive-data-protection/landing/inspection/jobs?project={project_id}")
     print("==========================================================================")
 
 
 # ==============================================================================
-# MODULE 7: Merged Golden Demo 04 (Custom Aspect Types) + 09 (AI Automated Aspects)
+# MODULE 6: Custom Aspect Types & AI-Automated Aspect Tagging via Gemini
 # ==============================================================================
 def cmd_ai_catalog_governance(args):
     project_id, authed_session, bq_client = get_clients(args.project, args.location)
@@ -586,7 +692,7 @@ def cmd_ai_catalog_governance(args):
     parent_url = f"https://dataplex.googleapis.com/v1/projects/{project_id}/locations/{args.location}/aspectTypes"
     aspect_url = f"{parent_url}/{aspect_id}"
 
-    # 1. Create Custom Aspect Type in Dataplex Universal Catalog (Golden Demo 04)
+    # 1. Create Custom Aspect Type in Dataplex Universal Catalog
     if authed_session.get(aspect_url).status_code == 404:
         aspect_body = {
             "displayName": "ACSM BNM RMiT & PDPA Governance Aspect",
@@ -607,10 +713,10 @@ def cmd_ai_catalog_governance(args):
         }
         authed_session.post(f"{parent_url}?aspectTypeId={aspect_id}", json=aspect_body)
 
-    # 2. Gather Schema + Sample Rows + Module 6 SDP/DLP Findings and invoke Gemini (Golden Demo 09)
+    # 2. Gather Schema + Module 5 SDP/DLP Findings and invoke Gemini
     sdp_rows = list(
         bq_client.query(
-            f"SELECT column_name, dlp_infotype, sensitivity_level, governance_action "
+            f"SELECT column_name, dlp_infotype, infotype_category, sensitivity_level, governance_action "
             f"FROM `{project_id}.acsm_observability.sdp_pii_findings`"
         ).result()
     )
@@ -622,7 +728,7 @@ def cmd_ai_catalog_governance(args):
     from google.genai import types
 
     client = genai.Client(vertexai=True, project=project_id, location="us-central1")
-    prompt = f"""You are the Automated Aspect Data Governance Agent (Golden Demo 04 + 09) for AEON Credit Service Malaysia (ACSM).
+    prompt = f"""You are the Automated Aspect Data Governance Agent for AEON Credit Service Malaysia (ACSM).
 Given the Dataplex Custom Aspect Type `{aspect_id}`, the schema of `acsm_gold.gold_aeon_customer360_profile`, and the Sensitive Data Protection (Cloud DLP) scan findings:
 - Schema: {json.dumps(schema_summary)}
 - DLP Findings: {json.dumps(sdp_summary)}
@@ -638,7 +744,7 @@ Generate structured JSON aspect values for `acsm_gold.gold_aeon_customer360_prof
     )
     ai_aspect_data = json.loads(resp.text)
 
-    # 3. Attach Custom Aspect to the BigQuery Table's Dataplex Entry (Golden Demo 04 + 09)
+    # 3. Attach Custom Aspect to the BigQuery Table's Dataplex Entry
     entry_name = (
         f"projects/{project_id}/locations/{args.location}/entryGroups/@bigquery/entries/"
         f"bigquery.googleapis.com/projects/{project_id}/datasets/acsm_gold/tables/gold_aeon_customer360_profile"
