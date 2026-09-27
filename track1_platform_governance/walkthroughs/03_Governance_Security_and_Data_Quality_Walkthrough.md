@@ -1,7 +1,7 @@
 # Track 1 (Notebook 03) Walkthrough: End-to-End Google Cloud Data Governance, Security & Data Quality
 
 **Notebook**: [`03_Governance_Security_and_Data_Quality.ipynb`](../notebook/03_Governance_Security_and_Data_Quality.ipynb)
-**Helper CLI**: [`governance_helper.py`](../scripts/governance_helper.py) & [`dq_rules_gold_customer360.yaml`](../scripts/dq_rules_gold_customer360.yaml)
+**Helper CLI & Rules YAML**: [`governance_helper.py`](../scripts/governance_helper.py) & [`dq_rules_gold_customer360.yaml`](../scripts/dq_rules_gold_customer360.yaml)
 **Target Region**: `asia-southeast1` (Singapore)
 **ACSM RFP Clauses**: `C1.1.1.1`, `C1.1.1.4`–`C1.1.1.10`, `C1.1.1.18`, `C1.1.1.24`, `C1.1.5.3`, `C1.1.5.5`, `C1.1.6.6`
 
@@ -11,46 +11,36 @@
 
 Notebook 03 showcases Google Cloud's unified **Dataplex Universal Catalog, Sensitive Data Protection (Cloud DLP), Fine-Grained Access Control, and Serverless FinOps** capabilities mapped directly to **BNM RMiT** and **Malaysian PDPA 2010** requirements.
 
-- **Outcome-Driven 1-Cell Modules**: Each governance capability is executed in a single concise CLI/SQL cell backed by [`governance_helper.py`](../scripts/governance_helper.py) so customers focus on governance outcomes rather than boilerplate code.
+- **Explicit Execution + Verification Pattern (`Module X.1` + `Module X.2`)**: Every module in Notebook 03 pairs a concise **Execution Cell (`Module X.1`)**—which also renders a clickable HTML banner (`target="_blank"`) to open the relevant GCP Console tab in a new browser tab—with an **Explicit `%%bigquery` SQL Verification Cell (`Module X.2` / `4.3`)** so users can immediately inspect and verify the structured outcome inside the notebook.
 - **Automatic SQLX Data Lineage**: Because `datalineage.googleapis.com` is enabled across Notebooks 01, 02, and Step 0 of Notebook 03, BigQuery automatically populates the interactive **Lineage** tab across all `acsm_bronze`, `acsm_silver`, and `acsm_gold` SQLX tables.
 - **Centralized Observability Dataset (`acsm_observability`)**: Every scan persists its structured outputs into BigQuery tables under `acsm_observability` for historical audit and Looker dashboards.
 
 ---
 
-## 2. Module-by-Module Walkthrough
+## 2. Module-by-Module Walkthrough (Execution + Explicit Verification Cells)
 
-| Module | Capability Showcased | 1-Cell Command | Observability Table & Console Verification |
+| Module | Capability Showcased | Execution Cell(s) | Explicit Verification Cell (`%%bigquery` SQL) & Direct Console Link (`target="_blank"`) |
 | :--- | :--- | :--- | :--- |
-| **Step 0** | **Environment, APIs & Automatic SQLX Lineage** (`datalineage.googleapis.com`) | Enables APIs & creates `acsm_observability` dataset | **BigQuery Studio -> `gold_aeon_customer360_profile` -> `Lineage` tab** |
-| **Module 1** | **Cloud Storage Lakehouse Data Discovery Scan** (`06-Data-Discovery-Scan`) | `gcloud dataplex datascans create data-discovery` + `governance_helper.py data-discovery` + `IPython.display.HTML` link bar | Stores job status & discovered objects in **`acsm_observability.dataplex_discovery_scan_results`** + outputs direct clickable link (`target="_blank"`) to **[Dataplex Cloud Storage Discovery Console](https://console.cloud.google.com/dataplex/cloud-storage-discovery)** (`Scan status` & `Scan history` tab) |
-| **Module 2** | **Automated Statistical Data Profiling** (`02-Data-Profile`) | `gcloud dataplex datascans create data-profile --export-results-table=...` + `governance_helper.py data-profile` | Stores summary in **`acsm_observability.dataplex_profile_summary`** (`dataplex_profile_scan_results`) + **BigQuery Studio `Data Profile` tab** |
-| **Module 3** | **AI Data Insights & Dataset Knowledge Graph** (`03-Data-Insights`) | `governance_helper.py data-insights --datasets=acsm_silver,acsm_gold` + `%%bigquery` SQL audit | Publishes Dataset Knowledge Graph (`SCHEMA_JOIN` on `CIF_ID`) & **100% Dataset, Table, and Column descriptions** |
-| **Module 4** | **Automated Data Quality (AutoDQ) & Quarantine Ledger** (`05-Data-Quality`) | **4.1**: `gcloud dataplex datascans create data-quality` + `governance_helper.py data-quality`<br>**4.2**: `%%bigquery` SQL query on `dataplex_dq_scan_results` | Stores 5-rule evaluation results in **`acsm_observability.dataplex_dq_scan_results`**, quarantined rows in **`acsm_observability.dq_quarantine_records`**, + **BigQuery Studio `Data Quality` tab** |
-| **Module 5** | **Sensitive Data Protection (Cloud DLP) Built-in & Custom InfoType Scan** (`07-Sensitive-Data-Protection-Scan`) | `governance_helper.py sdp-pii-scan` | Creates Inspect Template `acsm-pdpa-bnm-inspect-template` with **Built-in (`PERSON_NAME`) + Custom InfoTypes (`CUSTOM_ACSM_CIF_ID`, `CUSTOM_BNM_FINANCIAL_INCOME_MYR`, `CUSTOM_MALAYSIA_STATE_RESIDENCE`)** and writes findings to **`acsm_observability.sdp_pii_findings`** |
-| **Module 6** | **Dataplex Custom Governance Aspect Types & AI-Automated Aspect Tagging via Gemini** (`04` + `09`) | `governance_helper.py ai-catalog-governance` | Creates Custom Aspect Type `acsm-bnm-rmit-governance-aspect` and uses `gemini-2.5-flash` + Module 5's DLP findings to auto-populate the Dataplex Catalog Entry |
-| **Module 7** | **Fine-Grained Row-Level Security (RLS) & Column Dynamic Masking (CLS) + 1-Click Reset** (`08-Row-Column-Security-Data-Masking`) | **7.1**: `setup-cls-masking` + `bq query` RLS<br>**7.2**: `%%bigquery` live SQL<br>**7.3**: `reset-security-policies` | Demonstrates live simultaneous `SHA256` name masking + `0` net income masking + Central Region state RLS filtering, then restores all 100,000 unmasked rows for Tracks 2–4 |
-| **Module 8** | **Serverless FinOps Cost Attribution & Workload Telemetry** (`C1.1.1.18`) | `governance_helper.py finops-telemetry` | Builds and queries **`acsm_observability.vw_finops_job_telemetry`** |
+| **Step 0** | **Environment, APIs & Automatic SQLX Lineage** (`datalineage.googleapis.com`) | Enables APIs, creates `acsm_observability` dataset, and downloads `governance_helper.py` + [`dq_rules_gold_customer360.yaml`](../scripts/dq_rules_gold_customer360.yaml) | **BigQuery Studio -> `gold_aeon_customer360_profile` -> `Lineage` tab** |
+| **Module 1** | **Cloud Storage Lakehouse Data Discovery Scan** (`06-Data-Discovery-Scan`) | **1.1**: `gcloud dataplex datascans create data-discovery` + `governance_helper.py data-discovery` | **1.2 (`%%bigquery`)**: Queries **`acsm_observability.dataplex_discovery_scan_results`** (`latest_job_id`, `job_state`, `scanned_file_count`, discovered objects) + direct link to **[Dataplex Cloud Storage Discovery Console ↗](https://console.cloud.google.com/dataplex/cloud-storage-discovery)** (`Scan status` & `Scan history` tab) |
+| **Module 2** | **Automated Statistical Data Profiling** (`02-Data-Profile`) | **2.1**: `gcloud dataplex datascans create data-profile --export-results-table=...` + `governance_helper.py data-profile` | **2.2 (`%%bigquery`)**: Queries **`acsm_observability.dataplex_profile_summary`** (null %, uniqueness, income/CTOS/DSR distributions across 100,000 customers) + direct link to **BigQuery Studio `Data Profile` tab ↗** |
+| **Module 3** | **AI Data Insights & Dataset Knowledge Graph** (`03-Data-Insights`) | **3.1**: `governance_helper.py data-insights --datasets=acsm_silver,acsm_gold` | **3.2 (`%%bigquery`)**: Queries `INFORMATION_SCHEMA` across `acsm_bronze`, `acsm_silver`, and `acsm_gold` to verify **100% Dataset, Table & Column description coverage** + direct link to **BigQuery Studio `Insights` tab ↗** |
+| **Module 4** | **Automated Data Quality (AutoDQ) & Quarantine Ledger** (`05-Data-Quality`) | **4.1**: Inspect table-level rules YAML (`!cat dq_rules_gold_customer360.yaml`)<br>**4.2**: `gcloud dataplex datascans create data-quality --data-quality-spec-file=dq_rules_gold_customer360.yaml` + `governance_helper.py data-quality` | **4.3 (`%%bigquery`)**: Queries **`acsm_observability.dataplex_dq_scan_results`** (5 YAML rule evaluations) & **`acsm_observability.dq_quarantine_records`** + direct link to **BigQuery Studio `Data Quality` tab ↗** |
+| **Module 5** | **Sensitive Data Protection (Cloud DLP) Built-in & Custom InfoType Scan** (`07-Sensitive-Data-Protection-Scan`) | **5.1**: `governance_helper.py sdp-pii-scan` (`acsm-pdpa-bnm-inspect-template`) | **5.2 (`%%bigquery`)**: Queries **`acsm_observability.sdp_pii_findings`** to verify Built-in (`PERSON_NAME`) + Custom InfoTypes (`CUSTOM_ACSM_CIF_ID`, `CUSTOM_BNM_FINANCIAL_INCOME_MYR`, `CUSTOM_MALAYSIA_STATE_RESIDENCE`) + direct links to **Cloud DLP Console ↗** |
+| **Module 6** | **Dataplex Custom Governance Aspect Types & AI-Automated Aspect Tagging via Gemini** (`04` + `09`) | **6.1**: `governance_helper.py ai-catalog-governance` (`acsm-bnm-rmit-governance-aspect`) | **6.2 (`%%bigquery`)**: Queries **`acsm_observability.dataplex_ai_catalog_aspects`** (`data_domain`, `medallion_layer`, `bnm_rmit_tier`, `pdpa_contains_pii`, `identified_pii_columns`, `recommended_masking_policy`, `data_steward`) + direct link to **Dataplex Catalog Entry ↗** |
+| **Module 7** | **Fine-Grained Row-Level Security (RLS) & Column Dynamic Masking (CLS) + 1-Click Reset** (`08-Row-Column-Security-Data-Masking`) | **7.1**: `setup-cls-masking` + `bq query` RLS policy | **7.2 (`%%bigquery`)**: Queries `acsm_gold.gold_aeon_customer360_profile` to verify live simultaneous `SHA256` name masking + `0` income masking + 4 Central Region states<br>**7.3**: Runs `reset-security-policies` & verifies 100,000 unmasked rows restored |
+| **Module 8** | **Serverless FinOps Cost Attribution & Workload Telemetry** (`C1.1.1.18`) | **8.1**: `governance_helper.py finops-telemetry` | **8.2 (`%%bigquery`)**: Queries **`acsm_observability.vw_finops_job_telemetry`** to verify 7-day job count, `$0` serverless batch load pool, billed MB, and slot-seconds by workload tier |
 
 ---
 
-## 3. Verifying Discovery Scan Completion & Results in Module 1
+## 3. Inspecting the Table-Level Data Quality Rules YAML (`Module 4.1`)
 
-When **Module 1** runs `acsm-gcs-lakehouse-discovery-scan` over `gs://acsm-workshop-landing-{PROJECT_ID}`, the cell output displays a clickable HTML link bar (`target="_blank"`) that opens a new tab directly to the Console, along with the live job status and discovered objects:
-
-1. **Direct GCP Console Link (Opens in New Tab)**:
-   - **[Dataplex Cloud Storage Discovery Console ↗](https://console.cloud.google.com/dataplex/cloud-storage-discovery)** (`https://console.cloud.google.com/dataplex/cloud-storage-discovery?project={PROJECT_ID}`)
-   - Click **`acsm-gcs-lakehouse-discovery-scan`**:
-     - **Where to verify completion status**: Open the **`Scan history` tab** to see the `Job ID`, `Start time`, `End time`, and **`Status`** (`SUCCEEDED` vs `RUNNING`).
-     - **Where to see the discovery result**: Check the **`Scan status` section** on the overview page for:
-       - **Published BigQuery Dataset**: The auto-published dataset containing the discovered external/BigLake tables.
-       - **Scan Statistics (`dataDiscoveryResult.scanStatistics`)**: `Files scanned` (`scannedFileCount`), `Data processed` (`dataProcessedBytes`), `Tables created` (`tablesCreated`), `Tables updated` (`tablesUpdated`), and `Filesets created` (`filesetsCreated`).
-2. **BigQuery Observability Table (`acsm_observability.dataplex_discovery_scan_results`)**:
-   - `governance_helper.py data-discovery` queries the Dataplex `dataScans.jobs` API (`?view=FULL`) and persists the latest `latest_job_id`, `job_state`, `published_bigquery_dataset`, `scanned_file_count`, `data_processed_bytes`, `tables_created`, and discovered GCS object metadata (`m3CIF.csv.gz`, `Fact_EP_*`, `Fact_CC_*`) into `acsm_observability.dataplex_discovery_scan_results`.
-3. **CLI Verification Commands**:
-   ```bash
-   gcloud dataplex datascans jobs list --location=asia-southeast1 --datascan=acsm-gcs-lakehouse-discovery-scan
-   gcloud dataplex datascans jobs describe <JOB_ID> --location=asia-southeast1 --datascan=acsm-gcs-lakehouse-discovery-scan --view=FULL
-   ```
+Before running the Dataplex AutoDQ scan in **Module 4.2**, **Module 4.1** explicitly displays the declarative YAML file ([`track1_platform_governance/scripts/dq_rules_gold_customer360.yaml`](../scripts/dq_rules_gold_customer360.yaml), downloaded to `./dq_rules_gold_customer360.yaml` in Step 0):
+- **`cif_id_not_null`** (`COMPLETENESS`, `threshold: 1.0`): `CIF_ID` must be non-null.
+- **`cif_id_unique`** (`UNIQUENESS`, `threshold: 1.0`): `CIF_ID` must be 100% unique.
+- **`positive_annual_income`** (`VALIDITY`, `threshold: 0.99`): `B_AnnualIncome` must be strictly `> 0`.
+- **`valid_bnm_dsr_range`** (`VALIDITY`, `threshold: 0.95`): `avg_ep_new_dsr` must fall within `[0, 100]`.
+- **`malaysian_state_not_null`** (`COMPLETENESS`, `threshold: 1.0`): `State` must be non-null for Row-Level Security (RLS).
 
 ---
 
@@ -60,9 +50,3 @@ Module 5 creates a Cloud DLP **Inspect Template** (`acsm-pdpa-bnm-inspect-templa
 - **`CUSTOM_ACSM_CIF_ID`**: Custom Regex detector (`^[0-9]{5,10}$`) for One-AEON Customer IDs.
 - **`CUSTOM_BNM_FINANCIAL_INCOME_MYR`**: Custom Dictionary detector for BNM RMiT confidential income fields (`B_NetIncome`, `B_AnnualIncome`).
 - **`CUSTOM_MALAYSIA_STATE_RESIDENCE`**: Custom 16-State Dictionary detector (`Selangor`, `Kuala Lumpur`, `Johor`, `Penang`, etc.) for regional RLS governance.
-
-**Helpful Console & Documentation Links**:
-- [GCP Console — Sensitive Data Protection Inspect Templates](https://console.cloud.google.com/security/sensitive-data-protection/landing/configuration/templates/inspect)
-- [GCP Console — Sensitive Data Protection Inspection Jobs](https://console.cloud.google.com/security/sensitive-data-protection/landing/inspection/jobs)
-- [Google Cloud Docs — Creating & Using Custom InfoType Detectors](https://cloud.google.com/sensitive-data-protection/docs/creating-custom-infotypes)
-- [Google Cloud Docs — Built-in InfoType Detectors Reference (Malaysia)](https://cloud.google.com/sensitive-data-protection/docs/infotypes-reference#malaysia)
