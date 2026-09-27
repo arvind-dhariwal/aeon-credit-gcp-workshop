@@ -20,17 +20,17 @@ This notebook demonstrates 3 zero-copy data sharing and external enrichment patt
 ## 2. Step-by-Step Walkthrough
 
 ### Step 0 & Step 1: Enable Analytics Hub API & Bootstrap Clean Room / External Datasets
-- **What Happens**: Auto-detects `PROJECT_ID` in `asia-southeast1`, enables `analyticshub.googleapis.com`, and executes [`04_analytics_hub_cleanroom_and_external_datasets.sql`](../sql/04_analytics_hub_cleanroom_and_external_datasets.sql) to provision `acsm_cleanroom` and `acsm_subscribed_datasets`.
+- **What Happens**: Auto-detects `PROJECT_ID` in `asia-southeast1`, enables `analyticshub.googleapis.com`, and executes [`05_cleanroom_and_external_datasets.sql`](../sql/05_cleanroom_and_external_datasets.sql) to provision `acsm_cleanroom`, `acsm_subscribed_data`, and the zero-copy views (`acsm_gold.vw_analyticshub_merchant_spend_aggregations` and `acsm_cleanroom.vw_cleanroom_joint_customer_spend`).
 
-### Step 2 (Part A): Analytics Hub Zero-Copy Exchange (`acsm_one_aeon_exchange`)
+### Step 2 (Part A): Analytics Hub Zero-Copy Exchange (`acsm_aeon_exchange`)
 - **What Happens**:
-  1. Uses `bq mk --data_exchange` to create the `acsm_one_aeon_exchange` Data Exchange in `asia-southeast1`.
-  2. Queries the curated merchant category spend summary (`vw_curated_merchant_spend_listing`) shared with AEON Retail without exposing individual cardholder identities.
+  1. Uses the **Analytics Hub REST API v1 (`analyticshub.googleapis.com/v1`)** to create the `acsm_aeon_exchange` Data Exchange in `asia-southeast1` and publish the `acsm_merchant_spend_listing` zero-copy listing.
+  2. Queries the curated merchant category spend summary (`vw_analyticshub_merchant_spend_aggregations`) shared with AEON Retail without exposing individual cardholder identities.
 
 ### Step 3 (Part B): BigQuery Data Clean Room with Privacy-Preserving Thresholds (`k >= 20`)
 - **What Happens**:
-  1. Creates the Data Clean Room exchange (`acsm_aeon_retail_clean_room`) and verifies the Clean Room view `acsm_cleanroom.vw_cleanroom_one_aeon_overlap` configured with `OPTIONS (privacy_policy = '{"aggregation_threshold_policy": {"threshold": 20, "privacy_unit_columns": "email_sha256"}}')`.
-  2. Executes a `SELECT WITH AGGREGATION_THRESHOLDOPTIONS(threshold=20, privacy_unit_column=email_sha256)` query joining ACSM cardholders and AEON Retail loyalty members by `email_sha256`, returning only cohorts with **>= 20 matched customers** (`Malaysian PDPA Safe`).
+  1. Creates the BigQuery Data Clean Room exchange (`acsm_aeon_cleanroom_exchange` with `sharingEnvironmentConfig.dcrExchangeConfig`) via `analyticshub.googleapis.com/v1` and publishes the restricted Clean Room listing (`acsm_aeon_joint_customer_cleanroom_listing` with `restrictedExportConfig.enabled = True`) sharing `acsm_cleanroom.vw_cleanroom_joint_customer_spend`.
+  2. Executes the privacy-preserving analysis query joining ACSM cardholders (`m3CIF` + `Fact_CC_Sales`) and AEON Retail loyalty shoppers (`partner_aeon_retail_shoppers`), enforcing `HAVING COUNT(DISTINCT c.CIF_ID) >= 20` (`Malaysian PDPA Safe`).
 
 ### Step 4 (Part C): External Dataset Enrichment (Google Trends, Places POI & Google Ads)
 - **What Happens**:

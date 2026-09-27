@@ -51,7 +51,7 @@ OPTIONS (
   description = 'AEON Supermarket & Department Store Loyalty Member Spend contributed to the ACSM-AEON Data Clean Room (keyed on privacy-safe CIF match identifier).'
 ) AS
 SELECT
-  c.CIF_ID AS hashed_cif_match,
+  CAST(c.CIF_ID AS STRING) AS hashed_cif_match,
   CONCAT('AEON_LOYALTY_', CAST(c.CIF_ID AS STRING)) AS aeon_loyalty_member_id,
   CASE MOD(ABS(FARM_FINGERPRINT(CAST(c.CIF_ID AS STRING))), 6)
     WHEN 0 THEN 'AEON Mall Mid Valley Megamall'
@@ -88,9 +88,9 @@ SELECT
   ROUND(SUM(r.retail_spend_amt), 2) AS total_aeon_supermarket_spend_rm
 FROM `acsm_bronze.m3CIF` c
 JOIN `acsm_bronze.Fact_CC_Sales` s
-  ON c.CIF_ID = s.CIF_No
+  ON CAST(c.CIF_ID AS STRING) = CAST(s.CIF_No AS STRING)
 JOIN `acsm_cleanroom.partner_aeon_retail_shoppers` r
-  ON c.CIF_ID = r.hashed_cif_match
+  ON CAST(c.CIF_ID AS STRING) = CAST(r.hashed_cif_match AS STRING)
 GROUP BY 1, 2
 HAVING COUNT(DISTINCT c.CIF_ID) >= 20;
 
