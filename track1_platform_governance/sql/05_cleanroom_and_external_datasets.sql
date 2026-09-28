@@ -80,25 +80,36 @@ SELECT
 FROM `acsm_bronze.m3CIF` c
 WHERE MOD(ABS(FARM_FINGERPRINT(CAST(c.CIF_ID AS STRING))), 10) < 7;
 
--- Create a Clean Room Privacy-Enforced View that enforces k-anonymity (minimum 20 distinct CIFs)
+-- Create a Clean Room Privacy-Enforced View with Native BigQuery Analysis Rules (`OPTIONS(privacy_policy=...)`)
+-- Enforces Aggregation Threshold (threshold = 20 on privacy_unit_columns = 'CIF_ID') and Join Restriction Policy (JOIN_NOT_REQUIRED on CIF_ID, State)
 CREATE OR REPLACE VIEW `acsm_cleanroom.vw_cleanroom_joint_customer_spend`
 OPTIONS (
-  description = 'BNM RMiT & PDPA Compliant Clean Room View: Enforces k-anonymity (HAVING COUNT(DISTINCT CIF_ID) >= 20) on joint ACSM Cardholder + AEON Supermarket Loyalty spend.'
+  description = 'BNM RMiT & PDPA Compliant Clean Room View: Enforces Aggregation Threshold Analysis Rule (threshold=20, privacy_unit_columns=CIF_ID) and Join Restriction Policy (JOIN_NOT_REQUIRED on CIF_ID, State) on joint ACSM Cardholder + AEON Supermarket Loyalty spend.',
+  privacy_policy = '''{
+    "aggregation_threshold_policy": {
+      "threshold": 20,
+      "privacy_unit_columns": "CIF_ID"
+    },
+    "join_restriction_policy": {
+      "join_condition": "JOIN_NOT_REQUIRED",
+      "join_allowed_columns": ["CIF_ID", "State"]
+    }
+  }'''
 ) AS
 SELECT
+  CAST(c.CIF_ID AS STRING) AS CIF_ID,
   c.State,
   c.MaritalSts,
-  COUNT(DISTINCT c.CIF_ID) AS matching_joint_customers,
-  ROUND(AVG(CAST(c.B_GrossIncome AS NUMERIC)), 2) AS avg_monthly_income_rm,
-  ROUND(SUM(CAST(s.Amount AS NUMERIC)), 2) AS total_card_spend_rm,
-  ROUND(SUM(r.retail_spend_amt), 2) AS total_aeon_supermarket_spend_rm
+  CAST(c.B_GrossIncome AS NUMERIC) AS monthly_income_rm,
+  CAST(s.Amount AS NUMERIC) AS card_spend_rm,
+  r.retail_spend_amt AS aeon_supermarket_spend_rm,
+  r.preferred_aeon_store,
+  r.loyalty_tier
 FROM `acsm_bronze.m3CIF` c
 JOIN `acsm_bronze.Fact_CC_Sales` s
   ON CAST(c.CIF_ID AS STRING) = CAST(s.CIF_No AS STRING)
 JOIN `aeon_retail.partner_aeon_retail_shoppers` r
-  ON CAST(c.CIF_ID AS STRING) = CAST(r.hashed_cif_match AS STRING)
-GROUP BY 1, 2
-HAVING COUNT(DISTINCT c.CIF_ID) >= 20;
+  ON CAST(c.CIF_ID AS STRING) = CAST(r.hashed_cif_match AS STRING);
 
 -- =============================================================================
 -- PART C.1: SUBSCRIBED GOOGLE TRENDS — MALAYSIAN FINANCIAL INTENT

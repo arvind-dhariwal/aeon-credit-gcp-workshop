@@ -166,6 +166,40 @@ def setup_cleanroom(project_id: str, location: str):
             src_ds.access_entries = entries
             bq_client.update_dataset(src_ds, ["access_entries"])
 
+    # 0b. Ensure Clean Room View has Native BigQuery Analysis Rule (`OPTIONS(privacy_policy=...)`) attached
+    # so the Cloud Console Data Clean Room UI displays Rule type = Aggregation threshold (threshold=20, privacy_unit_columns=CIF_ID)
+    cleanroom_view_ddl = f"""
+    CREATE OR REPLACE VIEW `{PROJECT_ID}.acsm_cleanroom.vw_cleanroom_joint_customer_spend`
+    OPTIONS (
+      description = 'BNM RMiT & PDPA Compliant Clean Room View: Enforces Aggregation Threshold Analysis Rule (threshold=20, privacy_unit_columns=CIF_ID) and Join Restriction Policy (JOIN_NOT_REQUIRED on CIF_ID, State) on joint ACSM Cardholder + AEON Supermarket Loyalty spend.',
+      privacy_policy = '''{{
+        "aggregation_threshold_policy": {{
+          "threshold": 20,
+          "privacy_unit_columns": "CIF_ID"
+        }},
+        "join_restriction_policy": {{
+          "join_condition": "JOIN_NOT_REQUIRED",
+          "join_allowed_columns": ["CIF_ID", "State"]
+        }}
+      }}'''
+    ) AS
+    SELECT
+      CAST(c.CIF_ID AS STRING) AS CIF_ID,
+      c.State,
+      c.MaritalSts,
+      CAST(c.B_GrossIncome AS NUMERIC) AS monthly_income_rm,
+      CAST(s.Amount AS NUMERIC) AS card_spend_rm,
+      r.retail_spend_amt AS aeon_supermarket_spend_rm,
+      r.preferred_aeon_store,
+      r.loyalty_tier
+    FROM `{PROJECT_ID}.acsm_bronze.m3CIF` c
+    JOIN `{PROJECT_ID}.acsm_bronze.Fact_CC_Sales` s
+      ON CAST(c.CIF_ID AS STRING) = CAST(s.CIF_No AS STRING)
+    JOIN `{PROJECT_ID}.aeon_retail.partner_aeon_retail_shoppers` r
+      ON CAST(c.CIF_ID AS STRING) = CAST(r.hashed_cif_match AS STRING)
+    """
+    bq_client.query(cleanroom_view_ddl).result()
+
     # 1. Create or Verify BigQuery Data Clean Room (`dcrExchangeConfig`) in Singapore (asia-southeast1)
     dcr_id = "acsm_aeon_cleanroom_exchange"
     dcr_url = f"{base_ah_url}/{dcr_id}"
@@ -185,27 +219,33 @@ def setup_cleanroom(project_id: str, location: str):
     # 2. Publish or Verify Privacy-Restricted Clean Room Listing (`restrictedExportConfig.enabled=True`)
     dcr_listing_id = "acsm_aeon_joint_customer_cleanroom_listing"
     dcr_list_url = f"{dcr_url}/listings/{dcr_listing_id}"
+    listing_payload = {
+        "displayName": "ACSM & AEON Retail Joint Customer Spend",
+        "description": "Clean Room privacy-enforced view joining ACSM Cardholders and AEON Supermarket Loyalty Shoppers with Aggregation Threshold Analysis Rule (threshold=20, privacy_unit_columns=CIF_ID).",
+        "primaryContact": "data-governance@aeoncredit.com.my",
+        "bigqueryDataset": {
+            "dataset": f"projects/{PROJECT_ID}/datasets/acsm_cleanroom",
+            "selectedResources": [
+                {"table": f"projects/{PROJECT_ID}/datasets/acsm_cleanroom/tables/vw_cleanroom_joint_customer_spend"}
+            ],
+        },
+        "restrictedExportConfig": {
+            "enabled": True,
+            "restrictQueryResult": False,
+        },
+    }
     if ah_session.get(dcr_list_url).status_code == 404:
         dcr_list_resp = ah_session.post(
             f"{dcr_url}/listings?listingId={dcr_listing_id}",
-            json={
-                "displayName": "ACSM & AEON Retail Joint Customer Spend",
-                "description": "Clean Room privacy-enforced view joining ACSM Cardholders and AEON Supermarket Loyalty Shoppers with k>=20 aggregation threshold.",
-                "primaryContact": "data-governance@aeoncredit.com.my",
-                "bigqueryDataset": {
-                    "dataset": f"projects/{PROJECT_ID}/datasets/acsm_cleanroom",
-                    "selectedResources": [
-                        {"table": f"projects/{PROJECT_ID}/datasets/acsm_cleanroom/tables/vw_cleanroom_joint_customer_spend"}
-                    ],
-                },
-                "restrictedExportConfig": {
-                    "enabled": True,
-                    "restrictQueryResult": False,
-                },
-            },
+            json=listing_payload,
         )
         if dcr_list_resp.status_code not in (200, 409):
             print(f"⚠️ Clean Room Listing creation status ({dcr_list_resp.status_code}): {dcr_list_resp.text}")
+    else:
+        ah_session.patch(
+            f"{dcr_list_url}?updateMask=displayName,description,primaryContact,restrictedExportConfig",
+            json=listing_payload,
+        )
 
     dcr_info = ah_session.get(dcr_url).json()
     dcr_listings = ah_session.get(f"{dcr_url}/listings").json().get("listings", [])
@@ -223,6 +263,8 @@ def setup_cleanroom(project_id: str, location: str):
     print(f"  • Clean Room Resource   : `{dcr_info.get('name')}`")
     print(f"  • Display Name          : {dcr_info.get('displayName')}")
     print(f"  • Environment Config    : `dcrExchangeConfig` (Data Clean Room Mode Enabled)")
+    print(f"  • Analysis Rule Type    : `Aggregation threshold` (`threshold=20`, `privacy_unit_columns='CIF_ID'`)")
+    print(f"  • Join Restriction Rule : `JOIN_NOT_REQUIRED` (`join_allowed_columns=['CIF_ID', 'State']`)")
     print(f"  • Party 1 Source (ACSM) : `acsm_bronze.m3CIF` + `acsm_bronze.Fact_CC_Sales`")
     print(f"  • Party 2 Source (AEON) : `aeon_retail.partner_aeon_retail_shoppers`")
     for lst in dcr_listings:
