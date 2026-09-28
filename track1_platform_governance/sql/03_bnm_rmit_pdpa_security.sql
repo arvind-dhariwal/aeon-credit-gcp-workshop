@@ -44,14 +44,13 @@ EXECUTE IMMEDIATE FORMAT("""
 --    Attaches 4 IAM Data Governance Tags directly to physical columns on
 --    `acsm_gold.gold_aeon_customer360_profile` (provisioned by `setup_cls_data_governance_tags.py`):
 --      • `CIF_NM`            -> `<PROJECT_ID>/pii_classification` = `customer_name`
---                               (User 1: `SHA256` hash | User 2: `RAW_DATA_ACCESS_POLICY` unmasked)
+--                               (Persona 1: `SHA256` hash | Persona 2: `RAW_DATA_ACCESS_POLICY` | Persona 3: `403 Access Denied`)
 --      • `CIF_ID`            -> `<PROJECT_ID>/pii_classification` = `customer_id`
---                               (User 1: `LAST_FOUR_CHARACTERS` | User 2: `RAW_DATA_ACCESS_POLICY` unmasked)
+--                               (Persona 1: `LAST_FOUR_CHARACTERS` | Persona 2: `RAW_DATA_ACCESS_POLICY` | Persona 3: `403 Access Denied`)
 --      • `B_NetIncome`       -> `<PROJECT_ID>/pii_classification` = `financial_amount`
---                               (User 1: `DEFAULT_MASKING_VALUE` 0.0 | User 2: `RAW_DATA_ACCESS_POLICY` unmasked)
+--                               (Persona 1: `DEFAULT_MASKING_VALUE` 0.0 | Persona 2: `RAW_DATA_ACCESS_POLICY` | Persona 3: `403 Access Denied`)
 --      • `latest_ctos_score` -> `<PROJECT_ID>/pii_classification` = `credit_bureau_score`
---                               (User 1: STRICT `403 Access Denied` — cannot query column at all! |
---                                User 2: `RAW_DATA_ACCESS_POLICY` unmasked CTOS Bureau Score)
+--                               (Persona 1: `ALWAYS_NULL` -> NULL | Persona 2: `RAW_DATA_ACCESS_POLICY` | Persona 3: `403 Access Denied`)
 -- -----------------------------------------------------------------------------
 EXECUTE IMMEDIATE FORMAT("""
   ALTER TABLE `acsm_gold.gold_aeon_customer360_profile`
