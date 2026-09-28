@@ -13,7 +13,7 @@ As part of the **One-AEON Malaysia** ecosystem, ACSM collaborates with sister op
 This notebook demonstrates 3 zero-copy data sharing and external enrichment patterns in BigQuery:
 1. **Part A — Analytics Hub Zero-Copy Cross-Entity Data Sharing**: Publishing curated merchant spend aggregations from ACSM to AEON Retail with zero data duplication.
 2. **Part B — BigQuery Data Clean Room (`k >= 20` Aggregation Threshold)**: Privacy-preserving overlap analysis between `acsm_cleanroom.aeon_credit_cardholders` and `acsm_cleanroom.aeon_retail_loyalty_members` using `SELECT WITH AGGREGATION_THRESHOLD` so cohorts with fewer than 20 customers are automatically suppressed.
-3. **Part C — Subscribing to External Google Datasets**: Enriching ACSM internal credit & card data with **Google Search Trends**, **Google Maps / Places POI**, and **Google Ads Campaign Telemetry**.
+3. **Part C — Subscribing to External Google Datasets & BigQuery Geospatial Analytics**: Enriching ACSM internal credit & card data with **Google Search Trends**, **Google Maps / Places POI**, **Google Ads Campaign Telemetry**, and **BigQuery Geospatial Analytics (`GEOGRAPHY`, `ST_GEOGPOINT`, `ST_BUFFER`, `ST_DWITHIN`, `ST_DISTANCE`, `ST_ASTEXT`, `ST_ASGEOJSON`)**.
 
 ---
 
@@ -24,7 +24,7 @@ This notebook demonstrates 3 zero-copy data sharing and external enrichment patt
   - `acsm_analyticshub_shared`: Dedicated shared publisher dataset containing `vw_analyticshub_merchant_spend_aggregations`
   - `aeon_retail`: Partner dataset representing **AEON Retail Malaysia** (`aeon_retail.partner_aeon_retail_shoppers`)
   - `acsm_cleanroom`: Clean Room dataset containing the privacy-enforced view `acsm_cleanroom.vw_cleanroom_joint_customer_spend`
-  - `acsm_subscribed_data`: External Google datasets (Google Trends, Malaysia Places POI, Google Ads)
+  - `acsm_subscribed_data`: External Google datasets (Google Trends, Malaysia Places POI, Google Ads, and `GEOGRAPHY`-clustered AEON Malaysia Branch Hubs & External POIs)
 
 ### Step 2 (Part A): Analytics Hub Zero-Copy Exchange (`acsm_aeon_exchange`)
 - **What Happens**:
@@ -141,18 +141,22 @@ flowchart LR
 
 ---
 
-### Step 4 (Part C): Leveraging Live Public Datasets & Analytics Hub Public Listings (Google Trends, Google Maps Places Insights Malaysia & Google Ads)
+### Step 4 (Part C): Leveraging Live Public Datasets & Analytics Hub Public Listings (Google Trends, Google Maps Places Insights Malaysia, Google Ads & BigQuery Geospatial Analytics)
 - **What Happens**:
   0. **Step 4.0 (`analyticshub_helper.py setup-public-datasets`)**: Automatically subscribes the project via the Analytics Hub API to the official **Google Maps Places Insights — Kuala Lumpur, Malaysia (`MY`) Sample Listing** (`projects/1069876207066/locations/us/dataExchanges/places_insights_sample_exchange/listings/places_insights_sample_my` $\rightarrow$ linked dataset `places_insights___my___sample`), and syncs the live Malaysia slices from `US` public datasets into `acsm_subscribed_data` (`asia-southeast1`) so they can be joined directly in Singapore with `acsm_bronze`.
   1. **Google Search Trends (`Step 4.1a` & `Step 4.1b`)**:
      - **Step 4.1a (`US`)**: Queries `bigquery-public-data.google_trends.international_top_terms` & `international_top_rising_terms` directly (`WHERE country_name = 'Malaysia'`).
      - **Step 4.1b (`asia-southeast1`)**: Joins the live synced Malaysia state trends (`acsm_subscribed_data.google_trends_malaysia_top_terms`) with `acsm_bronze.m3CIF` across all 16 Malaysian states (`MY-01`..`MY-16`).
   2. **Google Maps Places Insights for Malaysia (`Step 4.2a` & `Step 4.2b`)**:
-     - **Step 4.2a (`US`)**: Queries the subscribed Analytics Hub linked dataset `places_insights___my___sample.places_sample` directly for Kuala Lumpur operational POIs (`primary_type`, `sublocality_level_1_names`, `accepts_credit_cards`, `accepts_nfc`, `rating`).
+     - **Step 4.2a (`US`)**: Queries the subscribed Analytics Hub linked dataset `places_insights___my___sample.places_sample` directly (`SELECT WITH AGGREGATION_THRESHOLD`) for Kuala Lumpur operational POIs (`primary_type`, `sublocality_level_1_names`, `accepts_credit_cards`, `accepts_nfc`, `rating`).
      - **Step 4.2b (`asia-southeast1`)**: Joins `acsm_bronze.Fact_CC_Sales` with `acsm_subscribed_data.malaysia_places_insights_kl` by retail category (`primary_type`) to benchmark ACSM card spend against Kuala Lumpur's real merchant density, credit card acceptance, and contactless NFC adoption.
   3. **Google Ads Public Datasets (`Step 4.3a` & `Step 4.3b`)**:
      - **Step 4.3a (`US`)**: Queries `bigquery-public-data.google_ads_transparency_center.creative_stats` directly for verified ad creatives (`ad_format_type`, `topic`, `advertiser_verification_status = 'VERIFIED'`).
      - **Step 4.3b (`asia-southeast1`)**: Performs a **direct zero-copy join in Singapore (`asia-southeast1`)** between the native regional public dataset `bigquery-public-data.google_ads_geo_mapping_asia_southeast1.ads_geo_region_mapping` & `ads_geo_criteria_mapping` (`WHERE target_country_region = 'Malaysia'`), `acsm_subscribed_data.google_ads_transparency_creatives`, `acsm_bronze.m3CIF`, and `acsm_bronze.dimProduct` (`Card_Status = 'Active'`).
+  4. **BigQuery Geospatial Analytics (`Step 4.4a`, `Step 4.4b` & `Step 4.4c` — `GEOGRAPHY`, `ST_GEOGPOINT`, `ST_BUFFER`, `ST_DWITHIN`, `ST_DISTANCE`, `ST_ASTEXT`, `ST_ASGEOJSON`)**:
+     - **Step 4.4a (`US` Public Geospatial Dataset Query)**: Queries `bigquery-public-data.overture_maps.place` (`geometry` column of type `GEOGRAPHY`) using `ST_GEOGPOINT`, `ST_DWITHIN(h.hub_geog, p.geometry, 5000)`, `ST_DISTANCE`, `ST_ASTEXT`, and `ST_ASGEOJSON` to discover real-world Malaysian POIs within a 5 km spherical geodesic radius of AEON Mall Mid Valley Megamall.
+     - **Step 4.4b (`asia-southeast1` Spatial `JOIN` over `GEOGRAPHY`-Clustered Tables)**: Performs an S2-indexed spatial join (`WHERE ST_DWITHIN(b.branch_geog, p.poi_geog, 5000)`) between `acsm_subscribed_data.aeon_malaysia_branch_hubs_geog` (`CLUSTER BY branch_geog, malaysian_state`) and `acsm_subscribed_data.malaysia_external_pois_geog` (`CLUSTER BY poi_geog, primary_category`), enriched with `aeon_retail.partner_aeon_retail_shoppers` to rank AEON Mall & ACSM branch catchment zones for co-branded merchant partnerships and EDC/QR terminal expansion.
+     - **Step 4.4c (Interactive Geospatial Catchment Map)**: Renders an interactive Leaflet.js / OpenStreetMap map directly in the notebook showing the 5 km geodesic `ST_BUFFER` catchment polygons (`ST_ASGEOJSON`) and nearby external Malaysian POIs (`ST_DWITHIN`).
 
 #### 🌐 Summary of Live Public Datasets & Analytics Hub Listings Used in Step 4
 | External Source | Live Public Dataset / Analytics Hub Listing | Regional Singapore (`asia-southeast1`) Table / Join |
@@ -160,5 +164,4 @@ flowchart LR
 | **1. Google Trends (Malaysia)** | `bigquery-public-data.google_trends.international_top_terms` & `international_top_rising_terms` (`WHERE country_name = 'Malaysia'`, `US`) | Synced by `analyticshub_helper.py setup-public-datasets` to `acsm_subscribed_data.google_trends_malaysia_top_terms` (`asia-southeast1`) & joined with `acsm_bronze.m3CIF` (`State`). |
 | **2. Google Maps Places Insights (Malaysia `MY`)** | Official Analytics Hub Listing: `projects/1069876207066/locations/us/dataExchanges/places_insights_sample_exchange/listings/places_insights_sample_my` $\rightarrow$ Linked Dataset `places_insights___my___sample.places_sample` (`US`) | Synced by `analyticshub_helper.py setup-public-datasets` to `acsm_subscribed_data.malaysia_places_insights_kl` (`asia-southeast1`) & joined with `acsm_bronze.Fact_CC_Sales` (`LDESC`). |
 | **3. Google Ads Public Datasets** | • **Native Singapore (`asia-southeast1`)**: `bigquery-public-data.google_ads_geo_mapping_asia_southeast1.ads_geo_criteria_mapping` & `ads_geo_region_mapping` (`WHERE target_country_region = 'Malaysia'`)<br>• **Live Public Dataset (`US`)**: `bigquery-public-data.google_ads_transparency_center.creative_stats` | Direct zero-copy join in `asia-southeast1` with `acsm_bronze.m3CIF` & `acsm_bronze.dimProduct` (`Wallet_Tier`, `Card_Status = 'Active'`) + `acsm_subscribed_data.google_ads_transparency_creatives`. |
-
-
+| **4. BigQuery Geospatial Analytics (Overture Maps Places & AEON Branch Catchment)** | `bigquery-public-data.overture_maps.place` (`GEOGRAPHY` column `geometry`, `US`) | Synced to `GEOGRAPHY`-clustered tables `acsm_subscribed_data.malaysia_external_pois_geog` & `acsm_subscribed_data.aeon_malaysia_branch_hubs_geog` (`asia-southeast1`) and joined via `ST_DWITHIN` with `aeon_retail.partner_aeon_retail_shoppers`. |

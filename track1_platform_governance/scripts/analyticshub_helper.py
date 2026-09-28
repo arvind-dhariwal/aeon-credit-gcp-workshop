@@ -604,8 +604,102 @@ def setup_public_datasets(project_id: str, location: str):
         ),
     ).result()
 
+    # 5. BigQuery Geospatial Analytics (`GEOGRAPHY` Data Type & Spatial Clustering):
+    #    a) Ensure `acsm_subscribed_data.aeon_malaysia_branch_hubs_geog` (`CLUSTER BY branch_geog, malaysian_state`) exists
+    hubs_geog_ddl = f"""
+    CREATE OR REPLACE TABLE `{PROJECT_ID}.acsm_subscribed_data.aeon_malaysia_branch_hubs_geog`
+    CLUSTER BY branch_geog, malaysian_state
+    OPTIONS (
+      description = 'Geospatial Feature Collection of AEON Mall & ACSM Branch Hubs across Malaysia with persisted GEOGRAPHY points (ST_GEOGPOINT) and 5km catchment polygons (ST_BUFFER), clustered by branch_geog.'
+    ) AS
+    WITH raw_hubs AS (
+      SELECT * FROM UNNEST([
+        STRUCT('HUB_KL_MIDVALLEY' AS hub_id, 'AEON Mall Mid Valley Megamall' AS aeon_hub_name, 'Kuala Lumpur' AS malaysian_state, 'Central' AS region, 101.6774 AS longitude, 3.1177 AS latitude),
+        STRUCT('HUB_KL_MALURI', 'AEON Style Taman Maluri', 'Kuala Lumpur', 'Central', 101.7295, 3.1259),
+        STRUCT('HUB_KL_KEPONG', 'AEON BiG Kepong & Metro Prima', 'Kuala Lumpur', 'Central', 101.6366, 3.2135),
+        STRUCT('HUB_KL_ALPHA_ANGLE', 'AEON Alpha Angle Wangsa Maju', 'Kuala Lumpur', 'Central', 101.7322, 3.2054),
+        STRUCT('HUB_KL_AU2', 'AEON Mall AU2 Setiawangsa', 'Kuala Lumpur', 'Central', 101.7495, 3.1766),
+        STRUCT('HUB_SEL_SHAH_ALAM', 'AEON Mall Shah Alam', 'Selangor', 'Central', 101.5432, 3.0769),
+        STRUCT('HUB_SEL_BUKIT_TINGGI', 'AEON Mall Bukit Tinggi Klang', 'Selangor', 'Central', 101.4426, 2.9945),
+        STRUCT('HUB_SEL_CHERAS_SELATAN', 'AEON Mall Cheras Selatan', 'Selangor', 'Central', 101.7584, 3.0338),
+        STRUCT('HUB_JHR_TEBRAU', 'AEON Mall Tebrau City Johor', 'Johor', 'Southern', 103.7959, 1.5494),
+        STRUCT('HUB_PNG_QUEENSBAY', 'AEON Mall Queensbay Penang', 'Pulau Pinang', 'Northern', 100.3069, 5.3332),
+        STRUCT('HUB_PRK_KINTA_CITY', 'AEON Mall Kinta City Ipoh', 'Perak', 'Northern', 101.1235, 4.6143),
+        STRUCT('HUB_SWK_KUCHING', 'AEON Mall Kuching Central', 'Sarawak', 'East Malaysia', 110.3358, 1.5293)
+      ])
+    )
+    SELECT
+      hub_id,
+      aeon_hub_name,
+      malaysian_state,
+      region,
+      longitude,
+      latitude,
+      ST_GEOGPOINT(longitude, latitude) AS branch_geog,
+      ST_BUFFER(ST_GEOGPOINT(longitude, latitude), 5000) AS catchment_5km_polygon_geog,
+      ST_ASTEXT(ST_GEOGPOINT(longitude, latitude)) AS branch_wkt,
+      ST_ASGEOJSON(ST_GEOGPOINT(longitude, latitude)) AS branch_geojson
+    FROM raw_hubs
+    """
+    bq_client.query(hubs_geog_ddl).result()
+
+    #    b) Sync real Malaysian Geospatial POI Features (`GEOGRAPHY` WKT points) from `bigquery-public-data.overture_maps.place` (`US`)
+    #       into `acsm_subscribed_data.malaysia_external_pois_geog` (`CLUSTER BY poi_geog, primary_category`) in `asia-southeast1`
+    overture_geog_sql = """
+    SELECT
+      CAST(id AS STRING) AS poi_id,
+      COALESCE(names.primary, 'Malaysian Retail POI') AS poi_name,
+      COALESCE(categories.primary, 'retail') AS primary_category,
+      CASE
+        WHEN bbox.xmin BETWEEN 101.60 AND 101.78 AND bbox.ymin BETWEEN 3.05 AND 3.24 THEN 'Kuala Lumpur'
+        WHEN bbox.xmin BETWEEN 101.35 AND 101.85 AND bbox.ymin BETWEEN 2.85 AND 3.35 THEN 'Selangor'
+        WHEN bbox.xmin BETWEEN 103.60 AND 103.90 AND bbox.ymin BETWEEN 1.45 AND 1.65 THEN 'Johor'
+        WHEN bbox.xmin BETWEEN 100.20 AND 100.50 AND bbox.ymin BETWEEN 5.20 AND 5.50 THEN 'Pulau Pinang'
+        WHEN bbox.xmin BETWEEN 101.00 AND 101.25 AND bbox.ymin BETWEEN 4.50 AND 4.70 THEN 'Perak'
+        ELSE 'Sarawak'
+      END AS malaysian_state,
+      ROUND(ST_X(ST_CENTROID(geometry)), 6) AS longitude,
+      ROUND(ST_Y(ST_CENTROID(geometry)), 6) AS latitude,
+      ROUND(COALESCE(confidence, 0.90), 3) AS confidence_score,
+      ST_ASTEXT(ST_CENTROID(geometry)) AS poi_geog,
+      ST_ASTEXT(ST_CENTROID(geometry)) AS poi_wkt,
+      ST_ASGEOJSON(ST_CENTROID(geometry)) AS poi_geojson
+    FROM `bigquery-public-data.overture_maps.place`
+    WHERE (
+        (bbox.xmin BETWEEN 101.40 AND 101.80 AND bbox.ymin BETWEEN 2.95 AND 3.25)
+        OR (bbox.xmin BETWEEN 103.72 AND 103.85 AND bbox.ymin BETWEEN 1.50 AND 1.60)
+        OR (bbox.xmin BETWEEN 100.25 AND 100.36 AND bbox.ymin BETWEEN 5.28 AND 5.38)
+        OR (bbox.xmin BETWEEN 101.08 AND 101.18 AND bbox.ymin BETWEEN 4.57 AND 4.66)
+        OR (bbox.xmin BETWEEN 110.28 AND 110.39 AND bbox.ymin BETWEEN 1.48 AND 1.58)
+      )
+      AND names.primary IS NOT NULL
+      AND categories.primary IS NOT NULL
+      AND geometry IS NOT NULL
+    LIMIT 1500
+    """
+    geog_poi_rows = _serialize_bq_rows(bq_us.query(overture_geog_sql).result())
+    geog_poi_table_id = f"{PROJECT_ID}.acsm_subscribed_data.malaysia_external_pois_geog"
+    geog_poi_schema = [
+        bigquery.SchemaField("poi_id", "STRING"),
+        bigquery.SchemaField("poi_name", "STRING"),
+        bigquery.SchemaField("primary_category", "STRING"),
+        bigquery.SchemaField("malaysian_state", "STRING"),
+        bigquery.SchemaField("longitude", "FLOAT64"),
+        bigquery.SchemaField("latitude", "FLOAT64"),
+        bigquery.SchemaField("confidence_score", "FLOAT64"),
+        bigquery.SchemaField("poi_geog", "GEOGRAPHY"),
+        bigquery.SchemaField("poi_wkt", "STRING"),
+        bigquery.SchemaField("poi_geojson", "STRING"),
+    ]
+    geog_job_cfg = bigquery.LoadJobConfig(
+        schema=geog_poi_schema,
+        write_disposition=bigquery.WriteDisposition.WRITE_TRUNCATE,
+        clustering_fields=["poi_geog", "primary_category"],
+    )
+    bq_client.load_table_from_json(geog_poi_rows, geog_poi_table_id, job_config=geog_job_cfg).result()
+
     print("==========================================================================")
-    print("🌐 [Step 4.0 Outcome] Live Public Datasets & Analytics Hub Subscriptions")
+    print("🌐 [Step 4.0 Outcome] Live Public Datasets, Analytics Hub & Geospatial Setup")
     print("==========================================================================")
     print(f"  1️⃣ Google Trends Public Dataset (`bigquery-public-data.google_trends`):")
     print(f"     • Live Source (`US`)     : `bigquery-public-data.google_trends.international_top_terms` & `international_top_rising_terms` (`country_name = 'Malaysia'`)")
@@ -619,16 +713,20 @@ def setup_public_datasets(project_id: str, location: str):
     print(f"     • Native `{LOCATION}` Table : `{PROJECT_ID}.acsm_subscribed_data.google_ads_malaysia_geo_targets`")
     print(f"     • Live Source (`US`)     : `bigquery-public-data.google_ads_transparency_center.creative_stats`")
     print(f"     • Synced Table (`{LOCATION}`): `{ads_table_id}` ({len(ads_rows)} verified creative benchmark rows loaded)")
+    print(f"  4️⃣ BigQuery Geospatial Analytics (`GEOGRAPHY` Data Type & Spatial Clustering):")
+    print(f"     • AEON Branch Hubs (`{LOCATION}`): `{PROJECT_ID}.acsm_subscribed_data.aeon_malaysia_branch_hubs_geog` (`CLUSTER BY branch_geog` with 5km `ST_BUFFER` polygons)")
+    print(f"     • External POIs (`{LOCATION}`)   : `{geog_poi_table_id}` ({len(geog_poi_rows)} real Malaysian `GEOGRAPHY` POI features loaded & clustered by `poi_geog`)")
     print("==========================================================================")
 
     render_html(
         f'<div style="margin-top:8px;padding:12px 16px;background:#e8f0fe;border-left:4px solid #1a73e8;border-radius:4px;font-family:sans-serif;font-size:13px;line-height:1.6;">'
-        f'🌐 <b>Live Google Public Datasets &amp; Analytics Hub Listings Configured (Zero Mock Data):</b><br>'
+        f'🌐 <b>Live Google Public Datasets, Analytics Hub Listings &amp; BigQuery Geospatial Tables Configured:</b><br>'
         f'• <b>Google Maps Places Insights (Malaysia <code>MY</code> Sample Listing)</b>: '
         f'<a href="{places_console_url}" target="_blank" rel="noopener noreferrer" style="color:#ffffff;background:#1a73e8;padding:4px 10px;border-radius:4px;text-decoration:none;font-weight:bold;display:inline-block;margin:2px 0;">🗺️ Open Places Insights Malaysia Listing in Analytics Hub ↗</a> '
         f'(Linked Dataset: <code>{places_linked_ds}.places_sample</code>)<br>'
         f'• <b>Google Trends Malaysia</b>: <code>bigquery-public-data.google_trends.international_top_terms</code> &rarr; synced to <code>acsm_subscribed_data.google_trends_malaysia_top_terms</code><br>'
-        f'• <b>Google Ads Geo Mapping (Native Singapore <code>asia-southeast1</code>)</b>: <code>bigquery-public-data.google_ads_geo_mapping_asia_southeast1.ads_geo_criteria_mapping</code> + <code>bigquery-public-data.google_ads_transparency_center.creative_stats</code>'
+        f'• <b>Google Ads Geo Mapping (Native Singapore <code>asia-southeast1</code>)</b>: <code>bigquery-public-data.google_ads_geo_mapping_asia_southeast1.ads_geo_criteria_mapping</code> + <code>bigquery-public-data.google_ads_transparency_center.creative_stats</code><br>'
+        f'• <b>BigQuery Geospatial Analytics (<code>GEOGRAPHY</code> Clustered Tables)</b>: <code>acsm_subscribed_data.aeon_malaysia_branch_hubs_geog</code> &amp; <code>acsm_subscribed_data.malaysia_external_pois_geog</code> (<code>ST_GEOGPOINT</code>, <code>ST_BUFFER</code>, <code>ST_DWITHIN</code>, <code>ST_DISTANCE</code>, <code>ST_ASGEOJSON</code>)'
         f'</div>'
     )
 

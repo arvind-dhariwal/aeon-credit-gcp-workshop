@@ -176,3 +176,46 @@ LEFT JOIN `bigquery-public-data.google_ads_geo_mapping_asia_southeast1.ads_geo_c
 WHERE r.target_country_region = 'Malaysia'
 GROUP BY 1, 2, 3, 4, 5;
 
+-- =============================================================================
+-- C.2: BIGQUERY GEOSPATIAL ANALYTICS (`GEOGRAPHY` DATA TYPE & SPATIAL CLUSTERING)
+-- Reference: https://docs.cloud.google.com/bigquery/docs/geospatial-data
+-- Persists WGS84 `GEOGRAPHY` points (`ST_GEOGPOINT`), 5 km spherical geodesic
+-- catchment polygons (`ST_BUFFER`), WKT (`ST_ASTEXT`), and GeoJSON (`ST_ASGEOJSON`),
+-- clustered by the `GEOGRAPHY` column (`CLUSTER BY branch_geog`) for optimized
+-- spatial joins (`ST_DWITHIN`, `ST_INTERSECTS`, `ST_CONTAINS`, `ST_DISTANCE`).
+-- =============================================================================
+CREATE OR REPLACE TABLE `acsm_subscribed_data.aeon_malaysia_branch_hubs_geog`
+CLUSTER BY branch_geog, malaysian_state
+OPTIONS (
+  description = 'Geospatial Feature Collection of AEON Mall & ACSM Branch Hubs across Malaysia with persisted GEOGRAPHY points (ST_GEOGPOINT) and 5km catchment polygons (ST_BUFFER), clustered by branch_geog.'
+) AS
+WITH raw_hubs AS (
+  SELECT * FROM UNNEST([
+    STRUCT('HUB_KL_MIDVALLEY' AS hub_id, 'AEON Mall Mid Valley Megamall' AS aeon_hub_name, 'Kuala Lumpur' AS malaysian_state, 'Central' AS region, 101.6774 AS longitude, 3.1177 AS latitude),
+    STRUCT('HUB_KL_MALURI', 'AEON Style Taman Maluri', 'Kuala Lumpur', 'Central', 101.7295, 3.1259),
+    STRUCT('HUB_KL_KEPONG', 'AEON BiG Kepong & Metro Prima', 'Kuala Lumpur', 'Central', 101.6366, 3.2135),
+    STRUCT('HUB_KL_ALPHA_ANGLE', 'AEON Alpha Angle Wangsa Maju', 'Kuala Lumpur', 'Central', 101.7322, 3.2054),
+    STRUCT('HUB_KL_AU2', 'AEON Mall AU2 Setiawangsa', 'Kuala Lumpur', 'Central', 101.7495, 3.1766),
+    STRUCT('HUB_SEL_SHAH_ALAM', 'AEON Mall Shah Alam', 'Selangor', 'Central', 101.5432, 3.0769),
+    STRUCT('HUB_SEL_BUKIT_TINGGI', 'AEON Mall Bukit Tinggi Klang', 'Selangor', 'Central', 101.4426, 2.9945),
+    STRUCT('HUB_SEL_CHERAS_SELATAN', 'AEON Mall Cheras Selatan', 'Selangor', 'Central', 101.7584, 3.0338),
+    STRUCT('HUB_JHR_TEBRAU', 'AEON Mall Tebrau City Johor', 'Johor', 'Southern', 103.7959, 1.5494),
+    STRUCT('HUB_PNG_QUEENSBAY', 'AEON Mall Queensbay Penang', 'Pulau Pinang', 'Northern', 100.3069, 5.3332),
+    STRUCT('HUB_PRK_KINTA_CITY', 'AEON Mall Kinta City Ipoh', 'Perak', 'Northern', 101.1235, 4.6143),
+    STRUCT('HUB_SWK_KUCHING', 'AEON Mall Kuching Central', 'Sarawak', 'East Malaysia', 110.3358, 1.5293)
+  ])
+)
+SELECT
+  hub_id,
+  aeon_hub_name,
+  malaysian_state,
+  region,
+  longitude,
+  latitude,
+  ST_GEOGPOINT(longitude, latitude) AS branch_geog,
+  ST_BUFFER(ST_GEOGPOINT(longitude, latitude), 5000) AS catchment_5km_polygon_geog,
+  ST_ASTEXT(ST_GEOGPOINT(longitude, latitude)) AS branch_wkt,
+  ST_ASGEOJSON(ST_GEOGPOINT(longitude, latitude)) AS branch_geojson
+FROM raw_hubs;
+
+
