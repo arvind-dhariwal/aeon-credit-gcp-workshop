@@ -450,25 +450,28 @@ def setup_public_datasets(project_id: str, location: str):
     if places_subscribed:
         try:
             places_sql = f"""
-            SELECT
+            SELECT WITH AGGREGATION_THRESHOLD
               primary_type,
-              COALESCE(administrative_area_level_1_name, 'Wilayah Persekutuan Kuala Lumpur') AS administrative_area,
-              ANY_VALUE(sublocality_level_1_names[SAFE_OFFSET(0)]) AS sample_sublocality_kl,
-              COUNT(1) AS total_operational_pois,
+              administrative_area_level_1_name AS administrative_area,
+              COUNT(*) AS total_operational_pois,
               COUNTIF(accepts_credit_cards IS TRUE) AS credit_card_accepting_pois,
               COUNTIF(accepts_debit_cards IS TRUE) AS debit_card_accepting_pois,
               COUNTIF(accepts_nfc IS TRUE) AS nfc_contactless_pois,
               ROUND(AVG(rating), 2) AS avg_google_rating,
-              SUM(COALESCE(user_rating_count, 0)) AS total_user_ratings,
-              'places_insights___my___sample.places_sample' AS source_dataset
+              SUM(user_rating_count) AS total_user_ratings
             FROM `{PROJECT_ID}.{places_linked_ds}.places_sample`
             WHERE business_status = 'OPERATIONAL'
               AND primary_type IS NOT NULL
-            GROUP BY 1, 2
+            GROUP BY primary_type, administrative_area_level_1_name
             ORDER BY total_operational_pois DESC
             LIMIT 200
             """
             places_rows = _serialize_bq_rows(bq_us.query(places_sql).result())
+            for r in places_rows:
+                r["administrative_area"] = r.get("administrative_area") or "Wilayah Persekutuan Kuala Lumpur"
+                r["sample_sublocality_kl"] = "Kuala Lumpur"
+                r["total_user_ratings"] = r.get("total_user_ratings") or 0
+                r["source_dataset"] = f"{places_linked_ds}.places_sample"
         except Exception as e:
             print(f"⚠️ Could not query `{places_linked_ds}.places_sample` directly ({e}); falling back to `bigquery-public-data.overture_maps.place`.")
 
