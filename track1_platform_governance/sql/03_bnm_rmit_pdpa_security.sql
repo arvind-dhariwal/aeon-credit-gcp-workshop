@@ -6,7 +6,7 @@
 -- - C1.1.1.24 (Fine-Grained Access Control: Dynamic Row & Column Masking)
 -- - C1.1.5.1  (BNM RMiT alignment: role separation, auditability, encryption)
 -- - C1.1.5.3  (Malaysian PDPA 2010: PII masking, consent linkage, Right-to-Erasure)
--- - C1.1.5.5  (Dynamic Data Masking: Partial Redaction, SHA-256 Hash, Default Value 0.0)
+-- - C1.1.5.5  (Dynamic Data Masking: SHA-256 Hash on Customer Full Name `CIF_NM`)
 -- =============================================================================
 
 -- -----------------------------------------------------------------------------
@@ -39,41 +39,27 @@ EXECUTE IMMEDIATE FORMAT("""
 """, @@project_id);
 
 -- -----------------------------------------------------------------------------
--- 2. Column-Level Security (CLS) & Dynamic Data Masking via IAM Data Governance Tags
+-- 2. Column-Level Security (CLS) & Dynamic Data Masking via IAM Data Governance Tag
 --    (`purpose = DATA_GOVERNANCE` + BigQuery Data Policy API v2, Clauses C1.1.5.3 & C1.1.5.5)
---    Attaches 4 IAM Data Governance Tags directly to physical columns on
---    `acsm_gold.gold_aeon_customer360_profile` (provisioned by `setup_cls_data_governance_tags.py`):
---      • `CIF_NM`            -> `<PROJECT_ID>/pii_classification` = `customer_name`
---                               (Persona 1: `SHA256` hash | Persona 2: `RAW_DATA_ACCESS_POLICY` | Persona 3: `403 Access Denied`)
---      • `CIF_ID`            -> `<PROJECT_ID>/pii_classification` = `customer_id`
---                               (Persona 1: `LAST_FOUR_CHARACTERS` | Persona 2: `RAW_DATA_ACCESS_POLICY` | Persona 3: `403 Access Denied`)
---      • `B_NetIncome`       -> `<PROJECT_ID>/pii_classification` = `financial_amount`
---                               (Persona 1: `DEFAULT_MASKING_VALUE` 0.0 | Persona 2: `RAW_DATA_ACCESS_POLICY` | Persona 3: `403 Access Denied`)
---      • `latest_ctos_score` -> `<PROJECT_ID>/pii_classification` = `credit_bureau_score`
---                               (Persona 1: `ALWAYS_NULL` -> NULL | Persona 2: `RAW_DATA_ACCESS_POLICY` | Persona 3: `403 Access Denied`)
+--    Attaches the `customer_name` IAM Data Governance Tag directly to `CIF_NM` on
+--    `acsm_gold.gold_aeon_customer360_profile` (while ensuring `CIF_ID`, which is a
+--    clustering column, and other columns are untagged):
+--      • `CIF_NM` -> `<PROJECT_ID>/pii_classification` = `customer_name`
+--                    (User 1: `SHA256` hash | User 2: `RAW_DATA_ACCESS_POLICY` unmasked)
 -- -----------------------------------------------------------------------------
+ALTER TABLE `acsm_gold.gold_aeon_customer360_profile`
+ALTER COLUMN CIF_ID SET OPTIONS (data_governance_tags=[]);
+
+ALTER TABLE `acsm_gold.gold_aeon_customer360_profile`
+ALTER COLUMN B_NetIncome SET OPTIONS (data_governance_tags=[]);
+
+ALTER TABLE `acsm_gold.gold_aeon_customer360_profile`
+ALTER COLUMN latest_ctos_score SET OPTIONS (data_governance_tags=[]);
+
 EXECUTE IMMEDIATE FORMAT("""
   ALTER TABLE `acsm_gold.gold_aeon_customer360_profile`
   ALTER COLUMN CIF_NM
   SET OPTIONS (data_governance_tags=[('%s/pii_classification', 'customer_name')])
-""", @@project_id);
-
-EXECUTE IMMEDIATE FORMAT("""
-  ALTER TABLE `acsm_gold.gold_aeon_customer360_profile`
-  ALTER COLUMN CIF_ID
-  SET OPTIONS (data_governance_tags=[('%s/pii_classification', 'customer_id')])
-""", @@project_id);
-
-EXECUTE IMMEDIATE FORMAT("""
-  ALTER TABLE `acsm_gold.gold_aeon_customer360_profile`
-  ALTER COLUMN B_NetIncome
-  SET OPTIONS (data_governance_tags=[('%s/pii_classification', 'financial_amount')])
-""", @@project_id);
-
-EXECUTE IMMEDIATE FORMAT("""
-  ALTER TABLE `acsm_gold.gold_aeon_customer360_profile`
-  ALTER COLUMN latest_ctos_score
-  SET OPTIONS (data_governance_tags=[('%s/pii_classification', 'credit_bureau_score')])
 """, @@project_id);
 
 -- -----------------------------------------------------------------------------

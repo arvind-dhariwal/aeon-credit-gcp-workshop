@@ -1,30 +1,18 @@
 #!/usr/bin/env python3
-"""Provisions Modern IAM Data Governance Tags (`purpose=DATA_GOVERNANCE`) and BigQuery Data Policies v2
-for Track 1 Notebook 03 (Step 1.3 — Column-Level Security & Dynamic Data Masking), aligned with
-the reference trainer guide (`Module1 Lab4 Data_governance_policy_tags_masking_instructions_trainer.md`):
+"""Provisions the Modern IAM Data Governance Tag (`purpose=DATA_GOVERNANCE`) and BigQuery Data Policies v2
+for Track 1 Notebook 03 (Step 1.3 — Column-Level Security & Dynamic Data Masking on `CIF_NM`):
 
   1. Pillar 1 — Cloud Resource Manager API v3 (`/v3/tagKeys`, `/v3/tagValues`):
      • Tag Key   : `<PROJECT_ID>/pii_classification` (`purpose = "DATA_GOVERNANCE"`)
-     • Tag Value : `customer_name`       (High Sensitivity        -> `CIF_NM`)
-     • Tag Value : `customer_id`         (Medium Sensitivity      -> `CIF_ID`)
-     • Tag Value : `financial_amount`    (High Sensitivity        -> `B_NetIncome`)
-     • Tag Value : `credit_bureau_score` (Restricted / CRA Act    -> `latest_ctos_score`)
+     • Tag Value : `customer_name` (High Sensitivity -> `CIF_NM` Customer Full Name)
 
   2. Pillar 3 — BigQuery Data Policy API v2 (`/v2/projects/<PROJECT_ID>/locations/<LOCATION>/dataPolicies`):
-     • 🛡️ Persona 2 (`acsm-compliance-auditor-sa@<PROJECT_ID>.iam.gserviceaccount.com` — HQ Compliance Auditor):
-       Granted `RAW_DATA_ACCESS_POLICY` on all 4 tags (`customer_name`, `customer_id`, `financial_amount`, `credit_bureau_score`)
-       -> Sees UNMASKED cleartext `CIF_ID`, `CIF_NM`, `B_NetIncome`, AND `latest_ctos_score`!
-     • 👤 Persona 1 (`user:<USER_EMAIL>` — Regional Branch Manager / Business Analyst):
-       Granted `DATA_MASKING_POLICY` on all 4 tags:
-         • `customer_name`       -> `SHA256` (64-char/base64 cryptographic hash on `CIF_NM`)
-         • `customer_id`         -> `LAST_FOUR_CHARACTERS` (`XXXXX...` on `CIF_ID`)
-         • `financial_amount`    -> `DEFAULT_MASKING_VALUE` (`0.0` on `B_NetIncome`)
-         • `credit_bureau_score` -> `ALWAYS_NULL` (SQL `NULL` on `latest_ctos_score`)
-       -> Queries `acsm_gold.gold_aeon_customer360_profile` with both RLS and CLS active simultaneously
-          with ZERO `403` errors!
-     • 🚫 Persona 3 (`acsm-restricted-user-sa@<PROJECT_ID>.iam.gserviceaccount.com` — Restricted User):
-       Granted NO `RAW_DATA_ACCESS_POLICY` and NO `DATA_MASKING_POLICY` on any of the 4 tags
-       -> Strictly blocked with `403 Access Denied: User does not have masked access or raw data access to protected columns`!
+     • 🛡️ User 2 (`acsm-compliance-auditor-sa@<PROJECT_ID>.iam.gserviceaccount.com`):
+       Granted `RAW_DATA_ACCESS_POLICY` on `customer_name`
+       -> Sees UNMASKED cleartext `CIF_NM` (e.g., `'MUHAMMAD FAIZ BIN AHMAD'`)!
+     • 👤 User 1 (`user:<USER_EMAIL>`):
+       Granted `DATA_MASKING_POLICY` (`SHA256`) on `customer_name`
+       -> Sees `CIF_NM` dynamically masked via irreversible `SHA256` cryptographic hash!
 """
 
 import argparse
@@ -42,21 +30,6 @@ TAG_VALUES_SPEC = {
         "Malaysian PDPA 2010 Direct Customer Full Name (CIF_NM)",
         "SHA256",
     ),
-    "customer_id": (
-        "Medium",
-        "Unique Customer Account & CIF Identifier (CIF_ID)",
-        "LAST_FOUR_CHARACTERS",
-    ),
-    "financial_amount": (
-        "High",
-        "BNM RMiT Confidential Monthly Net Income (B_NetIncome)",
-        "DEFAULT_MASKING_VALUE",
-    ),
-    "credit_bureau_score": (
-        "Restricted",
-        "Malaysian CRA Act 2010 External CTOS Bureau Score (latest_ctos_score)",
-        "ALWAYS_NULL",
-    ),
 }
 
 
@@ -71,17 +44,13 @@ def to_iam_v2_principal(email: str) -> str:
     return f"principal://goog/subject/{email}"
 
 
-def ensure_apis_and_personas(
-    project_id: str, location: str, user_email: str, restricted_sa: str
-):
-    """Enables required APIs and ensures Tag Admin/User roles and `acsm-restricted-user-sa` exist."""
+def ensure_apis_and_tag_iam(project_id: str, user_email: str):
+    """Enables Cloud Resource Manager + BigQuery Data Policy APIs and ensures Tag Admin/User roles."""
     subprocess.run(
         [
             "gcloud",
             "services",
             "enable",
-            "iam.googleapis.com",
-            "iamcredentials.googleapis.com",
             "cloudresourcemanager.googleapis.com",
             "bigquerydatapolicy.googleapis.com",
             "datacatalog.googleapis.com",
@@ -118,99 +87,9 @@ def ensure_apis_and_personas(
             text=True,
         )
 
-    # Ensure Restricted User SA (`acsm-restricted-user-sa`) exists even if Step 0 wasn't re-run
-    sa_short = restricted_sa.split("@")[0]
-    desc_proc = subprocess.run(
-        [
-            "gcloud",
-            "iam",
-            "service-accounts",
-            "describe",
-            restricted_sa,
-            f"--project={project_id}",
-            "--quiet",
-        ],
-        check=False,
-        capture_output=True,
-        text=True,
-    )
-    if desc_proc.returncode != 0:
-        subprocess.run(
-            [
-                "gcloud",
-                "iam",
-                "service-accounts",
-                "create",
-                sa_short,
-                "--display-name=ACSM Restricted User Persona (CLS 403 Access Denied & RLS Default Deny)",
-                f"--project={project_id}",
-                "--quiet",
-            ],
-            check=False,
-            capture_output=True,
-            text=True,
-        )
-        time.sleep(4)
 
-    subprocess.run(
-        [
-            "gcloud",
-            "iam",
-            "service-accounts",
-            "add-iam-policy-binding",
-            restricted_sa,
-            f"--member={caller_member}",
-            "--role=roles/iam.serviceAccountTokenCreator",
-            f"--project={project_id}",
-            "--quiet",
-        ],
-        check=False,
-        capture_output=True,
-        text=True,
-    )
-    for role in (
-        "roles/bigquery.user",
-        "roles/bigquery.jobUser",
-        "roles/bigquery.dataViewer",
-        "roles/datacatalog.viewer",
-        "roles/resourcemanager.tagViewer",
-        "roles/serviceusage.serviceUsageConsumer",
-    ):
-        subprocess.run(
-            [
-                "gcloud",
-                "projects",
-                "add-iam-policy-binding",
-                project_id,
-                f"--member=serviceAccount:{restricted_sa}",
-                f"--role={role}",
-                "--condition=None",
-                "--quiet",
-            ],
-            check=False,
-            capture_output=True,
-            text=True,
-        )
-    try:
-        bq_client = bigquery.Client(project=project_id, location=location)
-        ds = bq_client.get_dataset(f"{project_id}.acsm_gold")
-        entries = list(ds.access_entries)
-        if not any(e.entity_id == restricted_sa for e in entries):
-            entries.append(
-                bigquery.AccessEntry(
-                    role="READER",
-                    entity_type="userByEmail",
-                    entity_id=restricted_sa,
-                )
-            )
-            ds.access_entries = entries
-            bq_client.update_dataset(ds, ["access_entries"])
-    except Exception:
-        pass
-
-
-def clear_legacy_v1_policy_tags(bq_client: bigquery.Client, project_id: str):
-    """Ensures legacy v1 policyTags are removed from `gold_aeon_customer360_profile` before attaching v2 data_governance_tags."""
+def clear_other_column_tags(bq_client: bigquery.Client, project_id: str):
+    """Clears legacy v1 policyTags and removes any v2 data_governance_tags from clustering/other columns (`CIF_ID`, `B_NetIncome`, `latest_ctos_score`)."""
     table_ref = f"{project_id}.acsm_gold.gold_aeon_customer360_profile"
     try:
         table = bq_client.get_table(table_ref)
@@ -227,6 +106,14 @@ def clear_legacy_v1_policy_tags(bq_client: bigquery.Client, project_id: str):
             bq_client.update_table(table, ["schema"])
     except Exception:
         pass
+
+    for col in ("CIF_ID", "B_NetIncome", "latest_ctos_score"):
+        try:
+            bq_client.query(
+                f"ALTER TABLE `{table_ref}` ALTER COLUMN {col} SET OPTIONS (data_governance_tags=[]);"
+            ).result()
+        except Exception:
+            pass
 
 
 def wait_crm_operation(session: AuthorizedSession, op_json: dict):
@@ -245,7 +132,7 @@ def wait_crm_operation(session: AuthorizedSession, op_json: dict):
 
 
 def ensure_data_governance_tags(session: AuthorizedSession, project_id: str) -> str:
-    """Creates or resolves the `pii_classification` Tag Key (`purpose=DATA_GOVERNANCE`) and its 4 Tag Values."""
+    """Creates or resolves the `pii_classification` Tag Key (`purpose=DATA_GOVERNANCE`) and `customer_name` Tag Value."""
     namespaced_key = f"{project_id}/{TAG_KEY_SHORT_NAME}"
     ns_url = f"https://cloudresourcemanager.googleapis.com/v3/tagKeys/namespaced?name={namespaced_key}"
     resp = session.get(ns_url)
@@ -307,10 +194,8 @@ def ensure_v2_data_policies(
     location: str,
     user1_v2_principal: str,
     user2_v2_principal: str,
-    restricted_v2_principal: str,
 ):
-    """Provisions `RAW_DATA_ACCESS_POLICY` (for Persona 2) and `DATA_MASKING_POLICY` (for Persona 1) via Data Policy API v2,
-    while ensuring Persona 3 (`acsm-restricted-user-sa`) has NO data policy grants (`403 Access Denied`)."""
+    """Provisions `RAW_DATA_ACCESS_POLICY` (for User 2) and `DATA_MASKING_POLICY` (`SHA256` for User 1) on `customer_name`."""
     parent = f"projects/{project_id}/locations/{location}"
     base_url = f"https://bigquerydatapolicy.googleapis.com/v2/{parent}/dataPolicies"
     namespaced_key = f"{project_id}/{TAG_KEY_SHORT_NAME}"
@@ -334,7 +219,7 @@ def ensure_v2_data_policies(
         return None
 
     for tag_value, (_, _, masking_expr) in TAG_VALUES_SPEC.items():
-        # 1. RAW_DATA_ACCESS_POLICY for Persona 2 (HQ Compliance Auditor SA)
+        # 1. RAW_DATA_ACCESS_POLICY for User 2 (HQ Compliance Auditor SA)
         raw_policy_id = f"raw_{tag_value}_auditor"
         existing_raw = find_existing_policy(raw_policy_id, "RAW_DATA_ACCESS_POLICY", tag_value)
         if not existing_raw:
@@ -364,17 +249,13 @@ def ensure_v2_data_policies(
             f"https://bigquerydatapolicy.googleapis.com/v2/{raw_res_name}:addGrantees",
             json={"grantees": [user2_v2_principal]},
         )
-        # Ensure Persona 1 (Analyst) and Persona 3 (Restricted) are NOT in RAW_DATA_ACCESS_POLICY
-        remove_from_raw = [
-            p for p in (user1_v2_principal, restricted_v2_principal) if p != user2_v2_principal
-        ]
-        if remove_from_raw:
+        if user1_v2_principal != user2_v2_principal:
             session.post(
                 f"https://bigquerydatapolicy.googleapis.com/v2/{raw_res_name}:removeGrantees",
-                json={"grantees": remove_from_raw},
+                json={"grantees": [user1_v2_principal]},
             )
 
-        # 2. DATA_MASKING_POLICY for Persona 1 (Regional Branch Manager / Business Analyst)
+        # 2. DATA_MASKING_POLICY for User 1 (Regional Branch Manager)
         mask_policy_id = f"mask_{tag_value}_analyst"
         existing_mask = find_existing_policy(mask_policy_id, "DATA_MASKING_POLICY", tag_value)
         if not existing_mask:
@@ -407,86 +288,54 @@ def ensure_v2_data_policies(
             f"https://bigquerydatapolicy.googleapis.com/v2/{mask_res_name}:addGrantees",
             json={"grantees": [user1_v2_principal]},
         )
-        # Ensure Persona 3 (Restricted User) is NOT in DATA_MASKING_POLICY so Persona 3 gets 403 Access Denied
-        if restricted_v2_principal != user1_v2_principal:
-            session.post(
-                f"https://bigquerydatapolicy.googleapis.com/v2/{mask_res_name}:removeGrantees",
-                json={"grantees": [restricted_v2_principal]},
-            )
 
 
 def setup_cls_data_governance(
-    project_id: str,
-    location: str,
-    user_email: str,
-    auditor_sa: str,
-    restricted_sa: str = "",
+    project_id: str, location: str, user_email: str, auditor_sa: str
 ):
-    """End-to-end provisioning of IAM Data Governance Tags and BigQuery Data Policies v2 for the 3 Personas."""
+    """End-to-end provisioning of IAM Data Governance Tag (`customer_name`) and BigQuery Data Policies v2."""
     if not auditor_sa:
         auditor_sa = f"acsm-compliance-auditor-sa@{project_id}.iam.gserviceaccount.com"
-    if not restricted_sa:
-        restricted_sa = f"acsm-restricted-user-sa@{project_id}.iam.gserviceaccount.com"
 
-    ensure_apis_and_personas(project_id, location, user_email, restricted_sa)
+    ensure_apis_and_tag_iam(project_id, user_email)
 
     creds, _ = google.auth.default(scopes=["https://www.googleapis.com/auth/cloud-platform"])
     session = AuthorizedSession(creds)
     bq_client = bigquery.Client(project=project_id, location=location, credentials=creds)
 
-    clear_legacy_v1_policy_tags(bq_client, project_id)
+    clear_other_column_tags(bq_client, project_id)
     tag_key_name = ensure_data_governance_tags(session, project_id)
 
     user1_v2 = to_iam_v2_principal(user_email)
     user2_v2 = to_iam_v2_principal(auditor_sa)
-    restricted_v2 = to_iam_v2_principal(restricted_sa)
-    ensure_v2_data_policies(
-        session, project_id, location, user1_v2, user2_v2, restricted_v2
-    )
-
-    # Also refresh IPython cell magics if executed inside Jupyter/Colab via %run
-    try:
-        from setup_rls_cls_identities import register_ipython_magic
-
-        register_ipython_magic(project_id, location, auditor_sa, restricted_sa)
-    except Exception:
-        pass
+    ensure_v2_data_policies(session, project_id, location, user1_v2, user2_v2)
 
     print("==========================================================================")
-    print("🏷️  Pillar 1 & Pillar 3 Provisioned: IAM Data Governance Tags & Data Policies v2")
+    print("🏷️  Pillar 1 & Pillar 3 Provisioned: IAM Data Governance Tag & Data Policies v2")
     print("==========================================================================")
     print(f"  • Resource Manager Tag Key : `{project_id}/{TAG_KEY_SHORT_NAME}` ({tag_key_name}, purpose=DATA_GOVERNANCE)")
-    print("  • Sensitivity Tag Values   :")
-    for val, (tier, desc, expr) in TAG_VALUES_SPEC.items():
-        print(f"      - `{val:<19}` ({tier:<10} Tier) : {desc} -> Analyst Masking: `{expr}`")
+    print("  • Governed Column & Tag    : `CIF_NM` (Customer Full Name) -> `customer_name` (High Tier)")
+    print("  • Note on Clustering Cols  : `CIF_ID` & `State` are clustering keys on `gold_aeon_customer360_profile`")
+    print("                               and are kept untagged (BigQuery prohibits masking clustering keys).")
     print("--------------------------------------------------------------------------")
-    print(f"  👤 Persona 1 — Regional Branch Manager (Analyst) : {user1_v2}")
-    print("     • `mask_customer_name_analyst`       -> `CIF_NM`            masked via `SHA256`")
-    print("     • `mask_customer_id_analyst`         -> `CIF_ID`            masked via `LAST_FOUR_CHARACTERS`")
-    print("     • `mask_financial_amount_analyst`    -> `B_NetIncome`       masked via `DEFAULT_MASKING_VALUE` (0.0)")
-    print("     • `mask_credit_bureau_score_analyst` -> `latest_ctos_score` masked via `ALWAYS_NULL` (SQL NULL)")
-    print(f"  🛡️ Persona 2 — HQ Risk Auditor (Data Lead)       : {user2_v2}")
-    print("     • `raw_customer_name_auditor`        -> `CIF_NM`            UNMASKED Plaintext")
-    print("     • `raw_customer_id_auditor`          -> `CIF_ID`            UNMASKED Plaintext")
-    print("     • `raw_financial_amount_auditor`     -> `B_NetIncome`       UNMASKED Plaintext")
-    print("     • `raw_credit_bureau_score_auditor`  -> `latest_ctos_score` UNMASKED Plaintext")
-    print(f"  🚫 Persona 3 — Restricted User (No Policy Grant) : {restricted_v2}")
-    print("     • [NO RAW OR MASKING DATA POLICY]    -> STRICT `403 ACCESS DENIED` on all protected columns!")
+    print(f"  👤 User 1 (Regional Branch Manager) : {user1_v2}")
+    print("     • `mask_customer_name_analyst` (`DATA_MASKING_POLICY`) -> `CIF_NM` masked via `SHA256`")
+    print(f"  🛡️ User 2 (HQ Compliance Auditor)   : {user2_v2}")
+    print("     • `raw_customer_name_auditor`  (`RAW_DATA_ACCESS_POLICY`) -> `CIF_NM` UNMASKED Plaintext")
     print("--------------------------------------------------------------------------")
     print("  👉 Next Step (Step 1.3b): Run the Pure BigQuery SQL `ALTER TABLE ... ALTER COLUMN` cell")
-    print("     below to attach these 4 IAM Data Governance Tags to `acsm_gold.gold_aeon_customer360_profile`!")
+    print("     below to attach the `customer_name` tag to `CIF_NM` on `acsm_gold.gold_aeon_customer360_profile`!")
     print("==========================================================================")
 
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Provision IAM Data Governance Tags (purpose=DATA_GOVERNANCE) and BigQuery Data Policies v2."
+        description="Provision IAM Data Governance Tag (purpose=DATA_GOVERNANCE) and BigQuery Data Policies v2 on CIF_NM."
     )
     parser.add_argument("--project", default=os.environ.get("PROJECT_ID", ""))
     parser.add_argument("--location", default=os.environ.get("LOCATION", "asia-southeast1"))
     parser.add_argument("--user-email", default=os.environ.get("USER_EMAIL", ""))
     parser.add_argument("--auditor-sa", default=os.environ.get("AUDITOR_SA", ""))
-    parser.add_argument("--restricted-sa", default=os.environ.get("RESTRICTED_SA", ""))
     args, _ = parser.parse_known_args()
 
     project_id = args.project or subprocess.check_output(
@@ -495,20 +344,9 @@ def main():
     user_email = args.user_email or subprocess.check_output(
         ["gcloud", "config", "get-value", "account"], text=True
     ).strip()
-    auditor_sa = (
-        args.auditor_sa
-        or f"acsm-compliance-auditor-sa@{project_id}.iam.gserviceaccount.com"
-    )
-    restricted_sa = (
-        args.restricted_sa
-        or f"acsm-restricted-user-sa@{project_id}.iam.gserviceaccount.com"
-    )
+    auditor_sa = args.auditor_sa or f"acsm-compliance-auditor-sa@{project_id}.iam.gserviceaccount.com"
 
-    os.environ["AUDITOR_SA"] = auditor_sa
-    os.environ["RESTRICTED_SA"] = restricted_sa
-    setup_cls_data_governance(
-        project_id, args.location, user_email, auditor_sa, restricted_sa
-    )
+    setup_cls_data_governance(project_id, args.location, user_email, auditor_sa)
 
 
 if __name__ == "__main__":
