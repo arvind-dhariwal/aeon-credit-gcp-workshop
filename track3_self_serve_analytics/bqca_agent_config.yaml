@@ -1,7 +1,7 @@
 # =============================================================================
 # BIGQUERY CONVERSATIONAL ANALYTICS (BQCA) & PROPERTY GRAPH AGENT CONFIGURATION
 # Fulfils ACSM RFP Clauses C1.1.2.9, C1.1.2.10, and Annexure M (M1.4.2, M1.4.4)
-# Used by Track 1 Notebook 05 (`05_BigQuery_Graph_and_BQCA_Agent.ipynb`)
+# Used by Track 1 Notebook 06 (`06_BigQuery_Conversational_Analytics_Agent.ipynb`)
 # =============================================================================
 
 agent_id: "acsm-aeon360-bqca-agent"

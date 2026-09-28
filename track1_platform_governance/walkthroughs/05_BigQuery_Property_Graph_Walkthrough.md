@@ -1,18 +1,16 @@
-# Track 1 (Notebook 05) Walkthrough: BigQuery Property Graph (`ISO GQL`) & Conversational Analytics (`BQCA`) Agent
+# Track 1 (Notebook 05) Walkthrough: BigQuery Property Graph (`ISO GQL` & Interactive Graph Visualization)
 
-**Notebook**: [`05_BigQuery_Graph_and_BQCA_Agent.ipynb`](../notebook/05_BigQuery_Graph_and_BQCA_Agent.ipynb)
+**Notebook**: [`05_BigQuery_Property_Graph.ipynb`](../notebook/05_BigQuery_Property_Graph.ipynb)
 **Target Region**: `asia-southeast1` (Singapore)
-**ACSM RFP Clauses**: `C1.1.4.4`, `C1.1.6.11`, `C1.2.1.3`, `C1.2.2.1`, `C1.2.3.1`
+**ACSM RFP Clauses**: `C1.1.1.14`, `C1.1.1.15`, `C1.1.2.3`, `C1.1.2.4`
 
 ---
 
 ## 1. Executive Summary & Customer Context
 
-Traditional relational SQL tables require complex multi-way self-joins to uncover **first-party fraud rings, delinquency contagion across shared merchants/employers, and cross-sell paths** between Easy Payment (`EP`) and Credit Card (`CC`) product lines. At the same time, business executives and branch managers need **natural-language self-service analytics** over governed Gold tables without writing SQL or GQL.
+Traditional relational SQL tables require complex multi-way self-joins to uncover **first-party fraud rings, delinquency contagion across shared merchants/employers, and cross-sell paths** between Easy Payment (`EP`) and Credit Card (`CC`) product lines.
 
-This notebook showcases two cutting-edge capabilities natively inside BigQuery:
-1. **Part A — BigQuery Property Graph (`CREATE OR REPLACE PROPERTY GRAPH` & `ISO/IEC 39075 GQL`)**: Zero-ETL graph analytics directly over `acsm_gold` tables (`acsm_gold.acsm_credit_ecosystem_graph`) without exporting data to an external graph database.
-2. **Part B — BigQuery Conversational Analytics (`BQCA` — `geminidataanalytics.googleapis.com`)**: Provisioning and chatting with two governed Data Agents (`acsm-aeon360-bqca-agent` for SQL Customer 360 Q&A and `acsm-credit-graph-bqca-agent` for natural-language Graph traversal).
+This notebook showcases **BigQuery Property Graph (`CREATE OR REPLACE PROPERTY GRAPH` & `ISO/IEC 39075 GQL`)**: zero-ETL graph analytics directly over governed `acsm_gold` tables (`acsm_gold.acsm_credit_ecosystem_graph`) with interactive node-and-edge visualizations (`%%bigquery --graph`) directly inside the notebook—without exporting data to an external graph database.
 
 ---
 
@@ -43,9 +41,5 @@ This notebook showcases two cutting-edge capabilities natively inside BigQuery:
   - **Step 5.1 (`%%bigquery --graph`)**: Visualizes the cross-sell paths `p = (f:CreditFacility)<-[h:HOLDS_FACILITY]-(c:Customer)-[t:TRANSACTED_AT]->(m:Merchant)` (`RETURN TO_JSON(p) AS path`) for PDPA-consented (`pdpa_marketing_consent = 'Y'`), zero-delinquency Easy Payment (`EP`) customers with no active Credit Card (`active_card_count = 0`).
   - **Step 5.2 (`GRAPH_TABLE`)**: Outputs the prioritized tabular candidate list for instant Credit Card cross-sell at point-of-sale.
 
-### Step 6, Step 7, Step 8 & Step 9 (Part B & Cleanup): BigQuery Conversational Analytics (`BQCA`) Data Agents & Reservation Cleanup
-- **What Happens**:
-  1. **Step 6**: Provisions and publishes two governed BQCA Data Agents (`acsm-aeon360-bqca-agent` and `acsm-credit-graph-bqca-agent`) via `geminidataanalytics.googleapis.com/v1beta`.
-  2. **Step 7**: Runs a live multi-turn natural-language conversation (`:chat` API) asking business questions over `acsm_gold` marts.
-  3. **Step 8**: Asks a natural-language graph traversal question via `acsm-credit-graph-bqca-agent`, which automatically generates and executes `ISO GQL` over `acsm_gold.acsm_credit_ecosystem_graph`.
-  4. **Step 9**: Unassigns and deletes the temporary Enterprise slot reservation (`acsm-graph-enterprise-res`).
+### Step 6: Cleanup Activity — Delete BigQuery Enterprise Reservation & Project Assignment
+- **What Happens**: Unassigns `projects/{PROJECT_ID}` and deletes the temporary `acsm-graph-enterprise-res` Enterprise slot reservation so the project reverts to standard On-Demand query pricing before proceeding to **Notebook 06 (`06_BigQuery_Conversational_Analytics_Agent.ipynb`)**.
