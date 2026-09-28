@@ -1,0 +1,173 @@
+# ==============================================================================
+# AEON Credit Service Malaysia (ACSM) — Declarative Business Glossary-as-Code
+# File: track1_platform_governance/scripts/business_glossary_acsm.yaml
+# Target Region: asia-southeast1 (Singapore)
+# RFP Alignment: C1.1.1.8 (Unified Governance), C1.1.1.10 (Metadata & Business Glossary),
+#                C1.1.2.7 (Data Trust), C1.1.2.9 (BQCA Self-Serve Analytics Context)
+# ==============================================================================
+
+glossary:
+  id: acsm-enterprise-credit-glossary
+  display_name: "ACSM Enterprise Consumer Finance & Regulatory Glossary"
+  location: asia-southeast1
+  description: "Standardized business vocabulary for AEON Credit Service Malaysia (ACSM) covering Customer 360 Identity, BNM Responsible Financing Underwriting Metrics (DSR, NDI, CTOS), Collections & AKPK Restructuring, and Revolving/Easy Payment Product KPIs."
+
+categories:
+  - id: customer-identity-pdpa
+    display_name: "1. Customer Identity & PDPA Consent"
+    steward: "dpo@aeoncredit.com.my"
+    description: "Customer master identifiers, BNM socio-economic household income tiers (B40/M40/T20), and Malaysian PDPA 2010 marketing consent indicators."
+
+  - id: underwriting-bnm-credit-risk
+    display_name: "2. Credit Underwriting & BNM Regulatory Metrics"
+    steward: "underwriting-lead@aeoncredit.com.my"
+    description: "Affordability, debt burden, and credit bureau indicators governed by Bank Negara Malaysia (BNM) Responsible Financing Guidelines."
+
+  - id: collections-delinquency-recovery
+    display_name: "3. Collections, Delinquency & AKPK Restructuring"
+    steward: "collections-head@aeoncredit.com.my"
+    description: "Overdue principal exposure, delinquency aging buckets (Months In Arrears), and AKPK debt restructuring indicators."
+
+  - id: product-portfolio-cross-sell
+    display_name: "4. Consumer Finance Products & Portfolio Utilization"
+    steward: "marketing-ai@aeoncredit.com.my"
+    description: "Revolving credit card utilization and next-best-product cross-sell propensity indicators."
+
+terms:
+  - id: cif-id
+    display_name: "Customer Information File ID (CIF)"
+    category: customer-identity-pdpa
+    steward: "cdo-steward@aeoncredit.com.my"
+    definition: "Unique master customer identifier assigned by ACSM's core Customer Information File (m3CIF) to link an individual across Easy Payment (EP), Credit Card (CC), and Personal Financing (PF) accounts."
+    synonyms:
+      - "Master Customer Number"
+      - "One-AEON Customer ID"
+    related_terms:
+      - "pdpa-marketing-consent"
+    linked_columns:
+      - "acsm_gold.gold_aeon_customer360_profile.CIF_ID"
+      - "acsm_bronze.m3CIF.CIF_ID"
+
+  - id: bnm-household-income-tier
+    display_name: "BNM Household Income Tier (B40 / M40 / T20)"
+    category: customer-identity-pdpa
+    steward: "dpo@aeoncredit.com.my"
+    definition: "Standardized Malaysian socio-economic household income classification based on monthly net income (B_NetIncome): B40 (< RM 3,000), M40 (RM 3,000 - RM 7,000), and T20 (> RM 7,000). Used for BNM financial inclusion reporting and dynamic income masking under PDPA 2010."
+    synonyms:
+      - "Malaysian Socio-Economic Income Band"
+    related_terms:
+      - "net-disposable-income-ndi"
+      - "debt-service-ratio-dsr"
+    linked_columns:
+      - "acsm_gold.gold_aeon_customer360_profile.B_NetIncome"
+      - "acsm_gold.vw_customer360_rls_cls_masked.bnm_income_tier_band"
+
+  - id: pdpa-marketing-consent
+    display_name: "PDPA Marketing Consent Flag"
+    category: customer-identity-pdpa
+    steward: "dpo@aeoncredit.com.my"
+    definition: "Explicit customer opt-in indicator (RecvPromo_FG = 'Y') required under the Malaysian Personal Data Protection Act (PDPA) 2010 before targeting a customer with cross-sell or promotional campaigns."
+    synonyms:
+      - "Promotional Opt-In Indicator"
+    related_terms:
+      - "cif-id"
+    linked_columns:
+      - "acsm_gold.gold_aeon_customer360_profile.RecvPromo_FG"
+      - "acsm_bronze.m3CIF.RecvPromo_FG"
+
+  - id: debt-service-ratio-dsr
+    display_name: "Debt Service Ratio (DSR %)"
+    category: underwriting-bnm-credit-risk
+    steward: "underwriting-lead@aeoncredit.com.my"
+    definition: "Ratio of a borrower's total monthly debt obligations (ACSM + external CCRIS facilities) to monthly net income (DSR %). Under Bank Negara Malaysia (BNM) Responsible Financing Guidelines, DSR > 60% requires enhanced underwriting review and DSR > 100% is quarantined by AutoDQ."
+    synonyms:
+      - "Monthly Debt Burden Ratio"
+    related_terms:
+      - "net-disposable-income-ndi"
+      - "ctos-bureau-score"
+    linked_columns:
+      - "acsm_gold.gold_aeon_customer360_profile.avg_ep_dsr"
+      - "acsm_bronze.Fact_EP_Judge.DSR"
+
+  - id: net-disposable-income-ndi
+    display_name: "Net Disposable Income (NDI MYR)"
+    category: underwriting-bnm-credit-risk
+    steward: "underwriting-lead@aeoncredit.com.my"
+    definition: "Remaining monthly income in Malaysian Ringgit (MYR) after deducting statutory contributions, existing financing instalments, and minimum living expenditure buffers."
+    synonyms:
+      - "Residual Monthly Affordability"
+    related_terms:
+      - "debt-service-ratio-dsr"
+      - "bnm-household-income-tier"
+    linked_columns:
+      - "acsm_gold.gold_aeon_customer360_profile.avg_ep_ndi"
+      - "acsm_bronze.Fact_EP_Judge.NDI"
+
+  - id: ctos-bureau-score
+    display_name: "CTOS External Credit Bureau Score"
+    category: underwriting-bnm-credit-risk
+    steward: "credit-risk@aeoncredit.com.my"
+    definition: "3-digit external credit bureau score (100-999) sourced from CTOS Data Systems Malaysia (CTOS_Score) measuring historical credit repayment behavior and external legal/trade references at application underwriting."
+    synonyms:
+      - "External Bureau Credit Score"
+    related_terms:
+      - "debt-service-ratio-dsr"
+    linked_columns:
+      - "acsm_gold.gold_aeon_customer360_profile.avg_ep_ctos_score"
+      - "acsm_gold.gold_aeon_customer360_profile.avg_cc_ctos_score"
+      - "acsm_bronze.Fact_EP_Judge.CTOS_Score"
+
+  - id: unpaid-osp
+    display_name: "Unpaid Outstanding Principal (OSP MYR)"
+    category: collections-delinquency-recovery
+    steward: "collections-head@aeoncredit.com.my"
+    definition: "Total unpaid principal balance (Unpaid_OSP in MYR) currently overdue on delinquent Easy Payment or Credit Card accounts managed by ACSM Credit Control."
+    synonyms:
+      - "Delinquent Principal Exposure"
+    related_terms:
+      - "months-in-arrears-mia"
+      - "akpk-debt-management-flag"
+    linked_columns:
+      - "acsm_gold.gold_aeon_customer360_profile.ep_unpaid_osp"
+      - "acsm_bronze.Fact_EP_Collection.Unpaid_OSP"
+
+  - id: months-in-arrears-mia
+    display_name: "Months In Arrears (MIA / Od_Stage)"
+    category: collections-delinquency-recovery
+    steward: "collections-head@aeoncredit.com.my"
+    definition: "Delinquency aging bucket (M0 Current, M1: 1-30 DPD, M2: 31-60 DPD, M3: 61-90 DPD, M4+: 90+ DPD Non-Performing) governing collection dialer strategies and MFRS 9 Expected Credit Loss (ECL) staging."
+    synonyms:
+      - "Overdue Stage"
+      - "Delinquency Bucket"
+    related_terms:
+      - "unpaid-osp"
+    linked_columns:
+      - "acsm_gold.gold_aeon_customer360_profile.max_ep_overdue_stage"
+      - "acsm_bronze.Fact_EP_Collection.Od_Stage"
+
+  - id: akpk-debt-management-flag
+    display_name: "AKPK Debt Restructuring Indicator"
+    category: collections-delinquency-recovery
+    steward: "collections-head@aeoncredit.com.my"
+    definition: "Flag (AKPK_FG) identifying customers enrolled in Agensi Kaunseling dan Pengurusan Kredit (AKPK) Debt Management Programme, requiring automated outbound collection suppression and BNM fair-treatment restructuring compliance."
+    synonyms:
+      - "Debt Management Programme Flag"
+    related_terms:
+      - "months-in-arrears-mia"
+    linked_columns:
+      - "acsm_bronze.Fact_EP_Collection.AKPK_FG"
+      - "acsm_bronze.Fact_CC_Collection.AKPK_FG"
+
+  - id: revolving-credit-utilization
+    display_name: "Revolving Credit Card Utilization Ratio"
+    category: product-portfolio-cross-sell
+    steward: "marketing-ai@aeoncredit.com.my"
+    definition: "Ratio of current Credit Card outstanding balance to approved Credit Card limit (CP_CL_Usage / CP_CL). High utilization (> 80%) is a primary feature for both delinquency early-warning and Personal Financing debt-consolidation cross-sell propensity."
+    synonyms:
+      - "Credit Limit Utilization Rate"
+    related_terms:
+      - "debt-service-ratio-dsr"
+      - "unpaid-osp"
+    linked_columns:
+      - "acsm_gold.gold_aeon_customer360_profile.avg_cc_utilization_ratio"
+      - "acsm_bronze.Fact_CC_Sales.CP_CL_Usage"

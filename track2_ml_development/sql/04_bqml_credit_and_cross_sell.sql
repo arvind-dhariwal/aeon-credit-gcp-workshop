@@ -1,5 +1,5 @@
 -- =============================================================================
--- TRACK 2: AGENTIC DATA SCIENCE & FAST END-TO-END BIGQUERY ML (EP-TO-CC CROSS-SELL PIPELINE)
+-- TRACK 2: AGENTIC DATA SCIENCE, BIGQUERY ML PROPENSITY & TIMESFM 2.0 FORECASTING
 -- File: sql/04_bqml_credit_and_cross_sell.sql
 -- Region: asia-southeast1 (Singapore)
 --
@@ -7,6 +7,7 @@
 -- 1. Module 1: Governed Customer 360 Feature Store (`acsm_gold.ml_customer_feature_store`)
 -- 2. Module 2: Supervised EP -> CC Cross-Sell Model in Vertex AI Model Registry (`acsm_gold.model_ep_to_cc_cross_sell`)
 -- 3. Module 3: Explainable AI (`ML.EVALUATE`, `ML.GLOBAL_EXPLAIN`, `ML.EXPLAIN_PREDICT` Local SHAP)
+-- 4. Module 4: Zero-Shot Time-Series Forecasting with Google `TimesFM 2.0` (`AI.FORECAST`)
 -- =============================================================================
 
 -- -----------------------------------------------------------------------------
@@ -219,3 +220,34 @@ FROM ML.EXPLAIN_PREDICT(
 )
 ORDER BY probability DESC, B_NetIncome DESC
 LIMIT 15;
+
+-- -----------------------------------------------------------------------------
+-- MODULE 4: Zero-Shot 30-Day Credit Card Spend Forecast with Google `TimesFM 2.0` (`AI.FORECAST`)
+-- Forecasts daily Credit Card transaction spend across `Cash Purchase` and `Cash Advance`
+-- -----------------------------------------------------------------------------
+SELECT
+  Sales_Type,
+  DATE(forecast_timestamp) AS forecast_date,
+  ROUND(forecast_value, 2) AS forecasted_daily_spend_myr,
+  ROUND(prediction_interval_lower_bound, 2) AS lower_bound_myr,
+  ROUND(prediction_interval_upper_bound, 2) AS upper_bound_myr,
+  confidence_level
+FROM AI.FORECAST(
+  (
+    SELECT
+      SAFE.PARSE_DATE('%Y%m%d', CAST(TX_DT AS STRING)) AS tx_date,
+      TRIM(Sales_Type) AS Sales_Type,
+      SUM(CAST(Amount AS FLOAT64)) AS daily_spend_myr
+    FROM `acsm_bronze.Fact_CC_Sales`
+    WHERE SAFE.PARSE_DATE('%Y%m%d', CAST(TX_DT AS STRING)) IS NOT NULL
+    GROUP BY 1, 2
+  ),
+  data_col => 'daily_spend_myr',
+  timestamp_col => 'tx_date',
+  id_cols => ['Sales_Type'],
+  model => 'TimesFM 2.0',
+  horizon => 30,
+  confidence_level => 0.95
+)
+ORDER BY Sales_Type, forecast_date
+LIMIT 30;
