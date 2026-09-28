@@ -45,8 +45,13 @@ This notebook demonstrates how Google Cloud unifies **all 8 ACSM source tables (
   2. Registers `acsm_gcp_lakehouse_catalog` in the **BigLake Iceberg REST Catalog** (`biglake.googleapis.com/iceberg/v1/restcatalog`).
   3. Writes `m3CIF.csv.gz` into `acsm_gcp_lakehouse_catalog.acsm_gcp_bronze.m3CIF` using Serverless Spark (`org.apache.iceberg.spark.SparkCatalog`) and exposes it in BigQuery via the governed view `acsm_bronze.m3CIF`.
 
-### Step 8: Storage Engine 3 — Cross-Cloud AWS Glue Federated Apache Iceberg (`dimProduct` — 400,000 Rows)
+### Step 8: Storage Engine 3 — Cross-Cloud AWS Glue Federated Apache Iceberg (`dimProduct` — 65,000 Rows)
 - **What Happens**:
-  1. Registers the AWS Glue catalog (`aws-ap-southeast-1`) in BigQuery and retrieves the unique BigLake IAM Service Account ID for AWS IAM trust whitelisting.
-  2. Exposes the 400,000-row AWS S3 Iceberg table as `acsm_bronze.dimProduct`.
-  3. Executes **1 unified SQL query joining all 3 storage engines** (`BigQuery Native` + `GCP GCS Iceberg` + `AWS S3 Glue Iceberg`) to produce a cross-engine Customer Credit & Card Usage summary.
+  1. Registers the AWS Glue catalog (`ap-southeast-1`) in BigQuery (`acsm_aws_federated_catalog`) and retrieves the unique BigLake IAM Service Account ID for AWS IAM trust whitelisting.
+  2. Exposes the AWS S3 Iceberg table (`acsm_aws_federated_catalog.acsm_aws_bronze.dimproduct`) as the governed view `acsm_bronze.dimProduct` with all 22 column descriptions from `Mock Metadata.xlsx`.
+  3. **Cross-Cloud AWS Lineage Verification (`Lineage` Tab)**: Opening `acsm_bronze.dimProduct` $\rightarrow$ **Lineage** tab in BigQuery Studio visually confirms that data originates directly from **Amazon S3 (`aws` Iceberg metadata/Parquet files) $\rightarrow$ AWS Glue Federated Iceberg Table (`dimproduct`, 22 columns) $\rightarrow$ BigQuery Governed View (`dimProduct`)**:
+
+![Cross-Cloud AWS S3 to AWS Glue Federated Iceberg (`dimproduct`) to BigQuery View (`dimProduct`) Lineage](../images/aws_lakehouse_federated_lineage.png)
+
+  4. Executes **1 unified SQL query joining all 3 storage engines** (`BigQuery Native` + `GCP GCS Iceberg` + `AWS S3 Glue Iceberg`) to produce a cross-engine Customer Credit & Card Usage summary.
+
