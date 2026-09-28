@@ -60,7 +60,9 @@ In Google Cloud **Dataplex Universal Catalog (Knowledge Catalog)**, a **Business
 - **Glossary ID**: `acsm-enterprise-credit-glossary`
 - **Display Name**: `ACSM Enterprise Consumer Finance & Regulatory Glossary`
 - **Region**: `asia-southeast1` (Singapore)
-- **Console Link**: [`https://console.cloud.google.com/dataplex/dp-glossaries`](https://console.cloud.google.com/dataplex/dp-glossaries) (or **BigQuery $\rightarrow$ Governance $\rightarrow$ Business Glossary**)
+- **Direct Glossary Deep Link (Auto-rendered with `PROJECT_ID` in Notebook `Step 1.5a` output)**:
+  `https://console.cloud.google.com/dataplex/dp-glossaries/projects/<PROJECT_ID>/locations/asia-southeast1/glossaries/acsm-enterprise-credit-glossary?project=<PROJECT_ID>`
+- **All Glossaries Console Link**: [`https://console.cloud.google.com/dataplex/dp-glossaries`](https://console.cloud.google.com/dataplex/dp-glossaries) (or **BigQuery $\rightarrow$ Governance $\rightarrow$ Business Glossary**)
 
 ### 3.2 Recommended 4 Categories & 10 Standardized ACSM Business Terms
 
