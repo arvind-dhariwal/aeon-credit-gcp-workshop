@@ -60,7 +60,7 @@ terms:
       - "debt-service-ratio-dsr"
     linked_columns:
       - "acsm_gold.gold_aeon_customer360_profile.B_NetIncome"
-      - "acsm_gold.vw_customer360_rls_cls_masked.bnm_income_tier_band"
+      - "acsm_bronze.m3CIF.B_NetIncome"
 
   - id: pdpa-marketing-consent
     display_name: "PDPA Marketing Consent Flag"

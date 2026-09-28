@@ -112,72 +112,67 @@ JOIN `aeon_retail.partner_aeon_retail_shoppers` r
   ON CAST(c.CIF_ID AS STRING) = CAST(r.hashed_cif_match AS STRING);
 
 -- =============================================================================
--- PART C.1: SUBSCRIBED GOOGLE TRENDS — MALAYSIAN FINANCIAL INTENT
+-- PART C: LEVERAGING LIVE GOOGLE PUBLIC DATASETS & ANALYTICS HUB PUBLIC LISTINGS
 -- =============================================================================
-CREATE OR REPLACE TABLE `acsm_subscribed_data.google_trends_malaysia_financial_intent`
-CLUSTER BY region_name, term
-OPTIONS (
-  description = 'Subscribed Google Trends Dataset (asia-southeast1): Macro Financing Search Interest Index across Malaysian States for personal loan, credit card, car loan, and installment plan.'
-) AS
-SELECT * FROM UNNEST([
-  STRUCT('personal loan' AS term, 'Malaysia' AS country_name, 'Selangor' AS region_name, 96 AS score, DATE_SUB(CURRENT_DATE(), INTERVAL 3 DAY) AS date),
-  STRUCT('credit card', 'Malaysia', 'Kuala Lumpur', 94, DATE_SUB(CURRENT_DATE(), INTERVAL 3 DAY)),
-  STRUCT('installment plan', 'Malaysia', 'Johor', 91, DATE_SUB(CURRENT_DATE(), INTERVAL 5 DAY)),
-  STRUCT('car loan', 'Malaysia', 'Pulau Pinang', 89, DATE_SUB(CURRENT_DATE(), INTERVAL 5 DAY)),
-  STRUCT('personal loan', 'Malaysia', 'Johor', 88, DATE_SUB(CURRENT_DATE(), INTERVAL 7 DAY)),
-  STRUCT('credit card', 'Malaysia', 'Selangor', 87, DATE_SUB(CURRENT_DATE(), INTERVAL 7 DAY)),
-  STRUCT('installment plan', 'Malaysia', 'Selangor', 85, DATE_SUB(CURRENT_DATE(), INTERVAL 10 DAY)),
-  STRUCT('car loan', 'Malaysia', 'Perak', 83, DATE_SUB(CURRENT_DATE(), INTERVAL 10 DAY)),
-  STRUCT('personal loan', 'Malaysia', 'Sabah', 82, DATE_SUB(CURRENT_DATE(), INTERVAL 12 DAY)),
-  STRUCT('personal loan', 'Malaysia', 'Sarawak', 80, DATE_SUB(CURRENT_DATE(), INTERVAL 12 DAY)),
-  STRUCT('credit card', 'Malaysia', 'Pulau Pinang', 79, DATE_SUB(CURRENT_DATE(), INTERVAL 14 DAY)),
-  STRUCT('installment plan', 'Malaysia', 'Kedah', 77, DATE_SUB(CURRENT_DATE(), INTERVAL 14 DAY)),
-  STRUCT('car loan', 'Malaysia', 'Negeri Sembilan', 75, DATE_SUB(CURRENT_DATE(), INTERVAL 18 DAY)),
-  STRUCT('personal loan', 'Malaysia', 'Melaka', 74, DATE_SUB(CURRENT_DATE(), INTERVAL 21 DAY)),
-  STRUCT('installment plan', 'Malaysia', 'Pahang', 72, DATE_SUB(CURRENT_DATE(), INTERVAL 25 DAY)),
-  STRUCT('personal loan', 'Malaysia', 'Kelantan', 70, DATE_SUB(CURRENT_DATE(), INTERVAL 28 DAY)),
-  STRUCT('car loan', 'Malaysia', 'Terengganu', 68, DATE_SUB(CURRENT_DATE(), INTERVAL 30 DAY)),
-  STRUCT('credit card', 'Malaysia', 'Putrajaya', 86, DATE_SUB(CURRENT_DATE(), INTERVAL 6 DAY))
-]);
+-- Instead of mocked sample rows, Lab 1.4 Part C directly leverages 3 real Google
+-- Public Datasets and Analytics Hub Public Listings for Malaysia:
+--
+--   1. Google Trends International (`bigquery-public-data.google_trends.international_top_terms`
+--      & `international_top_rising_terms` where `country_name = 'Malaysia'`)
+--      -> Queried directly in `US` and synced to `acsm_subscribed_data.google_trends_malaysia_top_terms`
+--         in `asia-southeast1` via `analyticshub_helper.py setup-public-datasets`.
+--
+--   2. Google Maps Places Insights — Kuala Lumpur, Malaysia (`MY`) Sample Listing
+--      (`projects/1069876207066/locations/us/dataExchanges/places_insights_sample_exchange/listings/places_insights_sample_my`
+--       -> Subscribed Linked Dataset: `places_insights___my___sample.places_sample`)
+--      -> Queried directly in `US` and synced to `acsm_subscribed_data.malaysia_places_insights_kl`
+--         in `asia-southeast1` via `analyticshub_helper.py setup-public-datasets`.
+--
+--   3. Google Ads Public Datasets:
+--      a) `bigquery-public-data.google_ads_geo_mapping_asia_southeast1.ads_geo_criteria_mapping`
+--         & `ads_geo_region_mapping` (Natively hosted in `asia-southeast1` Singapore!)
+--      b) `bigquery-public-data.google_ads_transparency_center.creative_stats` (`US`)
+--         -> Queried directly in `US` and synced to `acsm_subscribed_data.google_ads_transparency_creatives`
+--            in `asia-southeast1` via `analyticshub_helper.py setup-public-datasets`.
+-- =============================================================================
 
--- =============================================================================
--- PART C.2: SUBSCRIBED MALAYSIA PLACES INSIGHT (GOOGLE MAPS / PLACES POI CATALOG)
--- =============================================================================
-CREATE OR REPLACE TABLE `acsm_subscribed_data.malaysia_places_catalog`
-CLUSTER BY location_keyword, business_category
+-- C.1: Native `asia-southeast1` View & Table from `bigquery-public-data.google_ads_geo_mapping_asia_southeast1`
+CREATE OR REPLACE TABLE `acsm_subscribed_data.google_ads_malaysia_geo_targets`
+CLUSTER BY region_iso_3166_2, acsm_state
 OPTIONS (
-  description = 'Subscribed Google Maps / Places Malaysia POI Catalog for geospatial and category enrichment of ACSM merchant transactions (Fact_CC_Sales.LDESC).'
+  description = 'Real Google Ads Geo Targeting Criteria & ISO-3166-2 Regions for Malaysia extracted directly from bigquery-public-data.google_ads_geo_mapping_asia_southeast1 (natively hosted in Singapore asia-southeast1).'
 ) AS
-SELECT * FROM UNNEST([
-  STRUCT('AEON CO (M) BHD-MID VALLEY' AS location_keyword, 'AEON Mall Mid Valley Megamall' AS place_name, 'Department Store & Supermarket' AS business_category, 'Kuala Lumpur' AS state, 3.1177 AS latitude, 101.6774 AS longitude, 4.6 AS google_rating),
-  STRUCT('AEON BIG (M) SDN BHD-KEPONG', 'AEON BiG Hypermarket Kepong', 'Hypermarket & Grocery', 'Kuala Lumpur', 3.2140, 101.6366, 4.4),
-  STRUCT('PARKSON GRAND-PAVILION', 'Parkson Elite Pavilion Kuala Lumpur', 'Luxury Department Store', 'Kuala Lumpur', 3.1488, 101.7133, 4.5),
-  STRUCT('GIANT HYPERMARKET-SHAH ALAM', 'Giant Hypermarket Seksyen 13 Shah Alam', 'Hypermarket & Grocery', 'Selangor', 3.0833, 101.5500, 4.3),
-  STRUCT('LOTUS\'S STORES-CHERAS', 'Lotus\'s Cheras Hypermarket', 'Hypermarket & Grocery', 'Kuala Lumpur', 3.0989, 101.7347, 4.4),
-  STRUCT('ECONSAVE-JOHOR', 'Econsave Cash & Carry Johor Bahru', 'Supermarket & Wholesale', 'Johor', 1.5311, 103.6714, 4.3),
-  STRUCT('MYDIN MOHAMED HOLDINGS', 'Mydin USJ Subang Jaya Mall', 'Hypermarket & Halal Wholesale', 'Selangor', 3.0583, 101.5947, 4.5),
-  STRUCT('TESCO STORES (M)', 'Lotus\'s (formerly Tesco) Mutiara Damansara', 'Hypermarket & Grocery', 'Selangor', 3.1569, 101.6131, 4.4),
-  STRUCT('WATSONS PERSONAL CARE', 'Watsons Pharmacy Sunway Pyramid', 'Health, Pharmacy & Personal Care', 'Selangor', 3.0731, 101.6075, 4.5),
-  STRUCT('PETRONAS DAGANGAN', 'PETRONAS Station NKVE Subang', 'Fuel & Convenience Mobility', 'Selangor', 3.1051, 101.5830, 4.4),
-  STRUCT('SHELL MALAYSIA', 'Shell Mint Hotel Kuala Lumpur Highway', 'Fuel & Convenience Mobility', 'Kuala Lumpur', 3.0567, 101.7056, 4.4),
-  STRUCT('KFC HOLDINGS', 'KFC Drive-Thru Bukit Bintang', 'Quick Service Restaurant (F&B)', 'Kuala Lumpur', 3.1466, 101.7115, 4.2),
-  STRUCT('GRABPAY TOP UP', 'Grab Financial Services Malaysia HQ', 'Digital Wallet & SuperApp', 'Selangor', 3.1128, 101.6430, 4.6),
-  STRUCT('SHOPEE PAY', 'Shopee Malaysia Mid Valley Southpoint', 'E-Commerce & Digital Wallet', 'Kuala Lumpur', 3.1165, 101.6768, 4.6),
-  STRUCT('LAZADA MALAYSIA', 'Lazada Malaysia Menara Worldwide', 'E-Commerce Marketplace', 'Kuala Lumpur', 3.1492, 101.7078, 4.5),
-  STRUCT('ZALORA MALAYSIA', 'Zalora Southeast Asia Fashion Hub', 'Fashion & Apparel E-Commerce', 'Kuala Lumpur', 3.1205, 101.6712, 4.4)
-]);
+SELECT
+  r.region_iso_3166_2,
+  r.target_region AS google_ads_target_region,
+  r.target_country_region AS country_name,
+  r.target_subcontinent AS subcontinent,
+  CASE r.region_iso_3166_2
+    WHEN 'MY-01' THEN 'Johor'
+    WHEN 'MY-02' THEN 'Kedah'
+    WHEN 'MY-03' THEN 'Kelantan'
+    WHEN 'MY-04' THEN 'Melaka'
+    WHEN 'MY-05' THEN 'Negeri Sembilan'
+    WHEN 'MY-06' THEN 'Pahang'
+    WHEN 'MY-07' THEN 'Pulau Pinang'
+    WHEN 'MY-08' THEN 'Perak'
+    WHEN 'MY-09' THEN 'Perlis'
+    WHEN 'MY-10' THEN 'Selangor'
+    WHEN 'MY-11' THEN 'Terengganu'
+    WHEN 'MY-12' THEN 'Sabah'
+    WHEN 'MY-13' THEN 'Sarawak'
+    WHEN 'MY-14' THEN 'Kuala Lumpur'
+    WHEN 'MY-15' THEN 'Labuan'
+    WHEN 'MY-16' THEN 'Putrajaya'
+    ELSE r.target_region
+  END AS acsm_state,
+  COUNT(DISTINCT c.ads_criteria_id) AS targetable_ads_criteria_ids,
+  COUNT(DISTINCT c.target_city) AS targetable_malaysian_cities,
+  STRING_AGG(DISTINCT c.target_city, ', ' ORDER BY c.target_city LIMIT 5) AS sample_target_cities
+FROM `bigquery-public-data.google_ads_geo_mapping_asia_southeast1.ads_geo_region_mapping` r
+LEFT JOIN `bigquery-public-data.google_ads_geo_mapping_asia_southeast1.ads_geo_criteria_mapping` c
+  ON r.target_country_region = c.target_country_region
+ AND r.target_region = c.target_region
+WHERE r.target_country_region = 'Malaysia'
+GROUP BY 1, 2, 3, 4, 5;
 
--- =============================================================================
--- PART C.3: SUBSCRIBED GOOGLE ADS CAMPAIGN PERFORMANCE (CARD ACQUISITION)
--- =============================================================================
-CREATE OR REPLACE TABLE `acsm_subscribed_data.google_ads_campaign_performance`
-CLUSTER BY campaign_id, ad_network_type
-OPTIONS (
-  description = 'Subscribed Google Ads Data Transfer table capturing ACSM digital card acquisition campaign impressions, clicks, and media spend mapped to dimProduct.Wallet_Tier.'
-) AS
-SELECT * FROM UNNEST([
-  STRUCT('Platinum' AS campaign_id, 'ACSM_AEON_Platinum_Visa_Cashback_Q3' AS campaign_name, 'Google Search & Performance Max' AS ad_network_type, 1450000 AS impressions, 94250 AS clicks, 188500.00 AS media_spend_rm),
-  STRUCT('Gold', 'ACSM_AEON_Gold_Mall_Rewards_Booster_Q3', 'YouTube & Display Network', 2180000 AS impressions, 130800 AS clicks, 156960.00 AS media_spend_rm),
-  STRUCT('Silver', 'ACSM_AEON_Silver_Everyday_Groceries_Q3', 'Google Search & Discovery', 1120000 AS impressions, 67200 AS clicks, 94080.00 AS media_spend_rm),
-  STRUCT('Basic', 'ACSM_AEON_Basic_FirstJobber_Starter_Q3', 'YouTube Shorts & App Campaigns', 1890000 AS impressions, 119070 AS clicks, 107163.00 AS media_spend_rm)
-]);

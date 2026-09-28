@@ -1196,137 +1196,23 @@ Generate structured JSON aspect values for `acsm_gold.gold_aeon_customer360_prof
 # MODULE 7: Row & Column Security + Dynamic Masking (RFP C1.1.1.24, C1.1.5.3, C1.1.5.5)
 # ==============================================================================
 def cmd_setup_cls_masking(args):
-    project_id, authed_session, bq_client = get_clients(args.project, args.location)
-    parent = f"projects/{project_id}/locations/{args.location}"
-    taxonomy_display_name = "ACSM_BNM_RMiT_PDPA_Classification"
+    from setup_cls_data_governance_tags import setup_cls_data_governance
 
-    tax_url = f"https://datacatalog.googleapis.com/v1/{parent}/taxonomies"
-    resp = authed_session.get(tax_url)
-    resp.raise_for_status()
-    taxonomies = resp.json().get("taxonomies", [])
-    taxonomy = next((t for t in taxonomies if t.get("displayName") == taxonomy_display_name), None)
-
-    if not taxonomy:
-        create_resp = authed_session.post(
-            tax_url,
-            json={
-                "displayName": taxonomy_display_name,
-                "description": "ACSM BNM RMiT & Malaysian PDPA 2010 Fine-Grained Access Control & Dynamic Data Masking Taxonomy",
-                "activatedPolicyTypes": ["FINE_GRAINED_ACCESS_CONTROL"],
-            },
-        )
-        create_resp.raise_for_status()
-        taxonomy = create_resp.json()
-    else:
-        if "FINE_GRAINED_ACCESS_CONTROL" not in taxonomy.get("activatedPolicyTypes", []):
-            patch_resp = authed_session.patch(
-                f"https://datacatalog.googleapis.com/v1/{taxonomy['name']}?updateMask=activatedPolicyTypes",
-                json={"activatedPolicyTypes": ["FINE_GRAINED_ACCESS_CONTROL"]},
-            )
-            patch_resp.raise_for_status()
-            taxonomy = patch_resp.json()
-
-    taxonomy_name = taxonomy["name"]
-    pt_url = f"https://datacatalog.googleapis.com/v1/{taxonomy_name}/policyTags"
-    pt_list = authed_session.get(pt_url).json().get("policyTags", [])
-
-    def get_or_create_policy_tag(display_name, description):
-        existing = next((p for p in pt_list if p.get("displayName") == display_name), None)
-        if existing:
-            return existing["name"]
-        r = authed_session.post(pt_url, json={"displayName": display_name, "description": description})
-        r.raise_for_status()
-        return r.json()["name"]
-
-    pt_pii_sha256 = get_or_create_policy_tag(
-        "PII_Customer_Identity_SHA256",
-        "Malaysian PDPA Direct Customer Identifier (CIF_NM) — Masked via SHA256 Hash",
-    )
-    pt_income_default = get_or_create_policy_tag(
-        "Confidential_Financial_Income_Null",
-        "BNM RMiT Confidential Monthly Net Income (B_NetIncome) — Masked via Default Value (0)",
-    )
-
-    for pt_res in [pt_pii_sha256, pt_income_default]:
-        iam_get = authed_session.post(f"https://datacatalog.googleapis.com/v1/{pt_res}:getIamPolicy", json={}).json()
-        bindings = [
-            b for b in iam_get.get("bindings", [])
-            if b.get("role") != "roles/datacatalog.categoryFineGrainedReader"
-        ]
-        authed_session.post(
-            f"https://datacatalog.googleapis.com/v1/{pt_res}:setIamPolicy",
-            json={"policy": {"bindings": bindings, "etag": iam_get.get("etag", "")}},
-        )
-
-    dp_url = f"https://bigquerydatapolicy.googleapis.com/v1/{parent}/dataPolicies"
-    existing_dps = authed_session.get(dp_url).json().get("dataPolicies", [])
-
-    def ensure_masking_policy(policy_id, policy_tag_res, masking_expr):
-        existing = next(
-            (d for d in existing_dps if d.get("dataPolicyId") == policy_id or d.get("policyTag") == policy_tag_res),
-            None,
-        )
-        if not existing:
-            r = authed_session.post(
-                dp_url,
-                json={
-                    "dataPolicyId": policy_id,
-                    "dataPolicyType": "DATA_MASKING_POLICY",
-                    "policyTag": policy_tag_res,
-                    "dataMaskingPolicy": {"predefinedExpression": masking_expr},
-                },
-            )
-            r.raise_for_status()
-            dp_name = r.json()["name"]
-        else:
-            dp_name = existing["name"]
-
-        iam_resp = authed_session.post(
-            f"https://bigquerydatapolicy.googleapis.com/v1/{dp_name}:setIamPolicy",
-            json={
-                "policy": {
-                    "bindings": [
-                        {
-                            "role": "roles/bigquerydatapolicy.maskedReader",
-                            "members": [f"user:{args.user_email}"],
-                        }
-                    ]
-                }
-            },
-        )
-        iam_resp.raise_for_status()
-        return dp_name
-
-    ensure_masking_policy("acsm_mask_cif_nm_sha256", pt_pii_sha256, "SHA256")
-    ensure_masking_policy("acsm_mask_net_income_default", pt_income_default, "DEFAULT_MASKING_VALUE")
+    project_id, _, bq_client = get_clients(args.project, args.location)
+    auditor_sa = f"acsm-compliance-auditor-sa@{project_id}.iam.gserviceaccount.com"
+    setup_cls_data_governance(project_id, args.location, args.user_email, auditor_sa)
 
     table_ref = f"{project_id}.acsm_gold.gold_aeon_customer360_profile"
-    table = bq_client.get_table(table_ref)
-    new_schema = []
-    for field in table.schema:
-        if field.name == "CIF_NM":
-            field_dict = field.to_api_repr()
-            field_dict["policyTags"] = {"names": [pt_pii_sha256]}
-            new_schema.append(bigquery.SchemaField.from_api_repr(field_dict))
-        elif field.name == "B_NetIncome":
-            field_dict = field.to_api_repr()
-            field_dict["policyTags"] = {"names": [pt_income_default]}
-            new_schema.append(bigquery.SchemaField.from_api_repr(field_dict))
-        else:
-            new_schema.append(field)
-
-    table.schema = new_schema
-    bq_client.update_table(table, ["schema"])
-
-    print("==========================================================================")
-    print("🔐 [Module 7.1 Outcome] Column-Level Dynamic Masking (CLS) + Row-Level Security (RLS)")
-    print("==========================================================================")
-    print(f"  • Taxonomy                : `{taxonomy_display_name}`")
-    print("  • CLS Policy Tag 1        : `CIF_NM` -> Masked via `SHA256`")
-    print("  • CLS Policy Tag 2        : `B_NetIncome` -> Masked via `DEFAULT_MASKING_VALUE (0)`")
-    print("  • RLS Row Access Policy   : `rlp_central_region_branch_manager` -> Central Region States Only")
-    print(f"  • Target Table Protected  : `{table_ref}`")
-    print("==========================================================================")
+    for col, tag_val in (
+        ("CIF_NM", "customer_name"),
+        ("CIF_ID", "customer_id"),
+        ("B_NetIncome", "financial_amount"),
+        ("latest_ctos_score", "credit_bureau_score"),
+    ):
+        bq_client.query(
+            f"ALTER TABLE `{table_ref}` ALTER COLUMN {col} "
+            f"SET OPTIONS (data_governance_tags=[('{project_id}/pii_classification', '{tag_val}')]);"
+        ).result()
 
 
 def cmd_reset_security_policies(args):
@@ -1334,6 +1220,14 @@ def cmd_reset_security_policies(args):
     table_ref = f"{project_id}.acsm_gold.gold_aeon_customer360_profile"
 
     bq_client.query(f"DROP ALL ROW ACCESS POLICIES ON `{table_ref}`;").result()
+
+    for col in ("CIF_NM", "CIF_ID", "B_NetIncome", "latest_ctos_score"):
+        try:
+            bq_client.query(
+                f"ALTER TABLE `{table_ref}` ALTER COLUMN {col} SET OPTIONS (data_governance_tags=[]);"
+            ).result()
+        except Exception:
+            pass
 
     table = bq_client.get_table(table_ref)
     clean_schema = []

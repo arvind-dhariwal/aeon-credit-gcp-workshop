@@ -56,3 +56,11 @@ This notebook demonstrates how Google Cloud unifies **all 8 ACSM source tables (
 
   4. Executes **1 unified SQL query joining all 3 storage engines** (`BigQuery Native` + `GCP GCS Iceberg` + `AWS S3 Glue Iceberg`) to produce a cross-engine Customer Credit & Card Usage summary.
 
+---
+
+### Final Notebook 01 Verification Checklist (BigQuery Studio Explorer)
+Refresh the **BigQuery Studio Explorer** pane on the left. Seeing these **3 Bronze Catalogs / Datasets** (`acsm_aws_federated_catalog.acsm_aws_bronze`, `acsm_bronze`, and `acsm_gcp_lakehouse_catalog.acsm_gcp_bronze`) confirms **Notebook 01 is 100% complete**:
+
+![Final Notebook 01 Verification in BigQuery Studio Explorer](../images/notebook1_final_explorer_verification.png)
+
+

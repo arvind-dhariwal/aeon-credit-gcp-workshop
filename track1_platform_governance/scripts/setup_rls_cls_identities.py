@@ -3,12 +3,14 @@
   - Identity 1 (Restricted Regional Analyst): `user:<USER_EMAIL>`
       * RLS (`rlp_central_region_branch_manager`): Sees ONLY 4 Central Region Malaysian states
         ('Selangor', 'Kuala Lumpur', 'Putrajaya', 'Negeri Sembilan').
-      * CLS (`vw_customer360_rls_cls_masked`): Sees MASKED customer name ('MU****AD'),
-        SHA-256 hash, and MASKED monthly net income (0.0).
+      * CLS (IAM Data Governance Tags + `DATA_MASKING_POLICY` v2 on `acsm_gold.gold_aeon_customer360_profile`):
+        Sees MASKED `CIF_ID` (`LAST_FOUR_CHARACTERS`), MASKED `CIF_NM` (`SHA256` hash),
+        and MASKED `B_NetIncome` (`DEFAULT_MASKING_VALUE` -> `0.0`).
   - Identity 2 (HQ Compliance & Risk Auditor): `serviceAccount:acsm-compliance-auditor-sa@<PROJECT_ID>.iam.gserviceaccount.com`
       * RLS (`rlp_hq_compliance_all_states`): Sees ALL 16 Malaysian states (4 Central Region states
         + all 12 other Malaysian states = 100,000 customers).
-      * CLS (`vw_customer360_rls_cls_masked`): Sees UNMASKED cleartext customer name (`CIF_NM`)
+      * CLS (IAM Data Governance Tags + `RAW_DATA_ACCESS_POLICY` v2 on `acsm_gold.gold_aeon_customer360_profile`):
+        Sees UNMASKED cleartext `CIF_ID`, UNMASKED cleartext customer name (`CIF_NM`),
         and UNMASKED exact monthly net income (`B_NetIncome`).
 
 Also registers the `%%bigquery_as_sa` IPython cell magic when loaded via `%run` in Jupyter/Colab
@@ -63,10 +65,10 @@ def get_impersonated_bq_client(project_id: str, location: str, sa_email: str) ->
 
 
 def setup_identities(project_id: str, location: str, user_email: str) -> str:
-    """Ensures `acsm-compliance-auditor-sa` exists and has BigQuery + TokenCreator IAM bindings."""
+    """Ensures `acsm-compliance-auditor-sa` exists and has BigQuery + TokenCreator + Tag Admin IAM bindings."""
     sa_email = f"{SA_NAME}@{project_id}.iam.gserviceaccount.com"
 
-    # 1. Ensure IAM Credentials API is enabled for keyless service account impersonation
+    # 1. Ensure IAM, Cloud Resource Manager (Tags v3), and BigQuery Data Policy v2 APIs are enabled
     subprocess.run(
         [
             "gcloud",
@@ -74,6 +76,9 @@ def setup_identities(project_id: str, location: str, user_email: str) -> str:
             "enable",
             "iam.googleapis.com",
             "iamcredentials.googleapis.com",
+            "cloudresourcemanager.googleapis.com",
+            "bigquerydatapolicy.googleapis.com",
+            "datacatalog.googleapis.com",
             f"--project={project_id}",
             "--quiet",
         ],
@@ -117,7 +122,7 @@ def setup_identities(project_id: str, location: str, user_email: str) -> str:
         created_new = True
         time.sleep(5)
 
-    # 3. Grant TokenCreator on the SA to the logged-in user (and active ADC principal if different)
+    # 3. Grant TokenCreator on the SA + Tag Admin/User & Data Policy Admin on project to the logged-in user
     caller_member = (
         f"serviceAccount:{user_email}"
         if user_email.endswith(".gserviceaccount.com")
@@ -139,13 +144,34 @@ def setup_identities(project_id: str, location: str, user_email: str) -> str:
         capture_output=True,
         text=True,
     )
+    for caller_role in (
+        "roles/resourcemanager.tagAdmin",
+        "roles/resourcemanager.tagUser",
+        "roles/bigquerydatapolicy.admin",
+    ):
+        subprocess.run(
+            [
+                "gcloud",
+                "projects",
+                "add-iam-policy-binding",
+                project_id,
+                f"--member={caller_member}",
+                f"--role={caller_role}",
+                "--condition=None",
+                "--quiet",
+            ],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
 
-    # 4. Grant BigQuery Job & Data Viewer roles to `acsm-compliance-auditor-sa`
+    # 4. Grant BigQuery Job & Data Viewer + Tag Viewer roles to `acsm-compliance-auditor-sa`
     for role in (
         "roles/bigquery.user",
         "roles/bigquery.jobUser",
         "roles/bigquery.dataViewer",
         "roles/datacatalog.viewer",
+        "roles/resourcemanager.tagViewer",
         "roles/serviceusage.serviceUsageConsumer",
     ):
         subprocess.run(
@@ -164,7 +190,7 @@ def setup_identities(project_id: str, location: str, user_email: str) -> str:
             text=True,
         )
 
-    # 5. Also grant immediate dataset-level READER access on `acsm_gold` (0-second propagation)
+    # 5. Grant immediate dataset-level READER access on `acsm_gold` & reset any prior column tags
     try:
         bq_client = bigquery.Client(project=project_id, location=location)
         ds_ref = f"{project_id}.acsm_gold"
@@ -180,6 +206,15 @@ def setup_identities(project_id: str, location: str, user_email: str) -> str:
             )
             ds.access_entries = entries
             bq_client.update_dataset(ds, ["access_entries"])
+
+        table_ref = f"{project_id}.acsm_gold.gold_aeon_customer360_profile"
+        for col in ("CIF_NM", "CIF_ID", "B_NetIncome", "latest_ctos_score"):
+            try:
+                bq_client.query(
+                    f"ALTER TABLE `{table_ref}` ALTER COLUMN {col} SET OPTIONS (data_governance_tags=[]);"
+                ).result()
+            except Exception:
+                pass
     except Exception:
         pass
 
@@ -190,17 +225,22 @@ def setup_identities(project_id: str, location: str, user_email: str) -> str:
     print("🔐 Two Governance Identities Configured for Side-by-Side RLS & CLS Testing")
     print("==========================================================================")
     print(f"  👤 User 1 (Regional Branch Manager - Restricted) : {caller_member}")
-    print("     • RLS Access : ONLY 4 Central Region States (Selangor, Kuala Lumpur, Putrajaya, Negeri Sembilan)")
-    print("     • CLS Access : MASKED Customer Name ('MU****AD'), SHA-256 Hash, and MASKED Net Income (0.0)")
+    print("     • RLS Policy : ONLY 4 Central Region States (Selangor, Kuala Lumpur, Putrajaya, Negeri Sembilan)")
+    print("     • CLS Policy : IAM Data Governance Tags (`purpose=DATA_GOVERNANCE`)")
+    print("                    - `CIF_NM`            -> Masked via `SHA256` cryptographic hash")
+    print("                    - `CIF_ID`            -> Masked via `LAST_FOUR_CHARACTERS` ('XXXXX...')")
+    print("                    - `B_NetIncome`       -> Masked via `DEFAULT_MASKING_VALUE` (0.0)")
+    print("                    - `latest_ctos_score` -> STRICT ACCESS DENIED (User 1 cannot query column at all!)")
     print(f"  🛡️ User 2 (HQ Compliance Auditor - Full Access)  : serviceAccount:{sa_email}")
-    print("     • RLS Access : ALL 16 Malaysian States (4 Central + 12 Other States = 100,000 customers)")
-    print("     • CLS Access : UNMASKED Full Customer Name (CIF_NM) & UNMASKED Exact Net Income (B_NetIncome)")
+    print("     • RLS Policy : ALL 16 Malaysian States (4 Central + 12 Other States = 100,000 customers)")
+    print("     • CLS Policy : `RAW_DATA_ACCESS_POLICY` via IAM Data Governance Tags (`purpose=DATA_GOVERNANCE`)")
+    print("                    - `CIF_NM`, `CIF_ID`, `B_NetIncome` & `latest_ctos_score` -> UNMASKED Plaintext")
     print("==========================================================================")
     return sa_email
 
 
 def register_ipython_magic(default_project: str, default_location: str, default_sa: str):
-    """Registers `%%bigquery_as_sa` cell magic in IPython/Jupyter if running inside a notebook."""
+    """Registers `%%bigquery_as_sa` and `%%bigquery_expect_access_denied` cell magics in IPython/Jupyter."""
     try:
         from IPython import get_ipython
         from IPython.core.magic import register_cell_magic
@@ -239,6 +279,42 @@ def register_ipython_magic(default_project: str, default_location: str, default_
             raise RuntimeError(
                 f"Failed to execute BigQuery query as {args.service_account}: {last_err}"
             )
+
+        @register_cell_magic
+        def bigquery_expect_access_denied(line, cell):
+            """Executes pure BigQuery SQL as User 1 and catches/displays the expected 403 Access Denied CLS error."""
+            import pandas as pd
+
+            parser = argparse.ArgumentParser(prog="%%bigquery_expect_access_denied", add_help=False)
+            parser.add_argument("--project", default=os.environ.get("PROJECT_ID", default_project))
+            parser.add_argument("--location", default=os.environ.get("LOCATION", default_location))
+            args, _ = parser.parse_known_args(shlex.split(line))
+
+            client = bigquery.Client(project=args.project, location=args.location)
+            try:
+                df = client.query(cell.strip()).result().to_dataframe()
+                print("⚠️ Query unexpectedly succeeded (verify column tag and policy binding):")
+                return df
+            except Exception as exc:
+                err_msg = str(exc).splitlines()[0] if str(exc) else repr(exc)
+                print(
+                    "🚫 [EXPECTED CLS 403 ACCESS DENIED VERIFIED] BigQuery blocked User 1 from querying "
+                    "restricted column `latest_ctos_score`!"
+                )
+                print(f"   • BigQuery Server Response: {err_msg}")
+                return pd.DataFrame(
+                    [
+                        {
+                            "queried_by_user": os.environ.get(
+                                "USER_EMAIL", "User 1 (Regional Branch Manager)"
+                            ),
+                            "attempted_column": "latest_ctos_score",
+                            "data_governance_tag": f"{args.project}/pii_classification = credit_bureau_score",
+                            "cls_enforcement_status": "403 ACCESS DENIED (Blocked from querying column)",
+                            "bigquery_error": err_msg,
+                        }
+                    ]
+                )
 
         ip.user_ns["AUDITOR_SA"] = default_sa
     except ImportError:

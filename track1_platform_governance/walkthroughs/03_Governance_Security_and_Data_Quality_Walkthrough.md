@@ -1,9 +1,9 @@
-# Track 1 (Notebook 03) Walkthrough: Fine-Grained Data Governance — RLS, CLS & Dynamic Data Masking in Pure BigQuery SQL
+# Track 1 (Notebook 03) Walkthrough: Fine-Grained Data Governance — RLS, IAM Data Governance Tags (CLS), Dynamic Data Masking & Business Glossary
 
 **Notebook**: [`03_Governance_Security_and_Data_Quality.ipynb`](../notebook/03_Governance_Security_and_Data_Quality.ipynb)
 **Parked Modules Notebook (Can be discarded at end)**: [`03b_Parked_Dataplex_DLP_and_Data_Quality.ipynb`](../notebook/03b_Parked_Dataplex_DLP_and_Data_Quality.ipynb)
 **SQL Script**: [`03_bnm_rmit_pdpa_security.sql`](../sql/03_bnm_rmit_pdpa_security.sql)
-**Identity Provisioning Helper**: [`setup_rls_cls_identities.py`](../scripts/setup_rls_cls_identities.py)
+**Identity & CLS Provisioning Helpers**: [`setup_rls_cls_identities.py`](../scripts/setup_rls_cls_identities.py), [`setup_cls_data_governance_tags.py`](../scripts/setup_cls_data_governance_tags.py)
 **Target Region**: `asia-southeast1` (Singapore)
 **ACSM RFP Clauses**: `C1.1.1.24`, `C1.1.5.3`, `C1.1.5.5`, `C1.1.2.2`, `C1.1.1.8`, `C1.1.1.10`
 
@@ -11,26 +11,26 @@
 
 ## 1. Executive Summary & Two-Identity Verification Architecture
 
-Notebook 03 demonstrates **Row-Level Security (RLS)**, **Column-Level Security (CLS)**, and **Dynamic Data Masking** in **pure BigQuery SQL** on the single Gold Customer 360 table (`acsm_gold.gold_aeon_customer360_profile`), aligned with **Bank Negara Malaysia (BNM) RMiT** and **Malaysian PDPA 2010**.
+Notebook 03 demonstrates **Row-Level Security (RLS)**, **Column-Level Security (CLS)**, and **Dynamic Data Masking** directly on the physical Gold Customer 360 table (`acsm_gold.gold_aeon_customer360_profile`) using **BigQuery Row Access Policies**, **Cloud Resource Manager IAM Data Governance Tags (`purpose=DATA_GOVERNANCE`)**, and **BigQuery Data Policy API v2**, aligned with **Bank Negara Malaysia (BNM) RMiT** and **Malaysian PDPA 2010**.
 
-To prove that BigQuery returns different results from the **exact same SQL query** depending on who executes the query, **Step 0** automatically configures **two distinct governance identities**:
+To prove that BigQuery returns different results from the **exact same SQL query on the physical table** depending on who executes the query, **Step 0** automatically configures **two distinct governance identities**:
 1. **👤 User 1 — Regional Branch Manager (Restricted Analyst)**: `user:<USER_EMAIL>` (your active logged-in workshop user, executed via `%%bigquery`)
 2. **🛡️ User 2 — Head Office Compliance & Risk Auditor (Full Access)**: `serviceAccount:acsm-compliance-auditor-sa@<PROJECT_ID>.iam.gserviceaccount.com` (auto-provisioned in Step 0 and executed via `%%bigquery_as_sa`)
 
-![Track 1 Notebook 03 Architecture: Row-Level Security (RLS), Column-Level Security (CLS) & Dynamic Data Masking in Pure BigQuery SQL](../images/notebook3_governance_security_flow.png)
+![Track 1 Notebook 03 Architecture: Row-Level Security (RLS), Column-Level Security (CLS) & Dynamic Data Masking in BigQuery](../images/notebook3_governance_security_flow.png)
 
 ```mermaid
 flowchart TB
-  GOLD[("🏦 Single Source of Truth:\nacsm_gold.gold_aeon_customer360_profile\n(100,000 Customers across 16 Malaysian States)\n• CIF_NM: 'MUHAMMAD FAIZ BIN AHMAD'\n• B_NetIncome: RM 5,400.00")]
+  GOLD[("🏦 Single Source of Truth:\nacsm_gold.gold_aeon_customer360_profile\n(100,000 Customers across 16 Malaysian States)\n• CIF_ID: 'CIF-0000001'\n• CIF_NM: 'MUHAMMAD FAIZ BIN AHMAD'\n• B_NetIncome: RM 5,400.00")]
 
   subgraph RLS["🔒 1. Row-Level Security (Two Row Access Policies)"]
     RLS_U1["Policy 1: rlp_central_region_branch_manager\nGRANT TO ('user:<USER_EMAIL>')\nFILTER USING (State IN ('Selangor', 'Kuala Lumpur',\n'Putrajaya', 'Negeri Sembilan'))"]
     RLS_U2["Policy 2: rlp_hq_compliance_all_states\nGRANT TO ('serviceAccount:acsm-compliance-auditor-sa@<PROJECT_ID>...')\nFILTER USING (TRUE)"]
   end
 
-  subgraph CLS["🛡️ 2. Column-Level Security & Dynamic Masking View (acsm_gold.vw_customer360_rls_cls_masked)"]
-    CLS_U1["👤 User 1 (Regional Branch Manager — user:<USER_EMAIL>):\n• RLS: Sees ONLY 4 Central Region States (~25,000 rows)\n• CIF_NM: MASKED ('MU****AD') + SHA-256 Hash\n• B_NetIncome: MASKED to 0.0 (only sees B40/M40/T20 band)"]
-    CLS_U2["🛡️ User 2 (HQ Compliance Auditor — acsm-compliance-auditor-sa):\n• RLS: Sees ALL 16 Malaysian States (4 Central + 12 Other = 100,000 rows)\n• CIF_NM: UNMASKED Full Cleartext Name ('MUHAMMAD FAIZ BIN AHMAD')\n• B_NetIncome: UNMASKED Exact Monthly Net Income (RM 5,400.00)"]
+  subgraph CLS["🏷️ 2. IAM Data Governance Tags (purpose=DATA_GOVERNANCE) + Data Policy API v2"]
+    CLS_U1["👤 User 1 (Regional Branch Manager — DATA_MASKING_POLICY):\n• RLS: Sees ONLY 4 Central Region States (~25,000 rows)\n• CIF_ID (customer_id): Masked via LAST_FOUR_CHARACTERS ('XXXXX...')\n• CIF_NM (customer_name): Masked via SHA256 Hash\n• B_NetIncome (financial_amount): Masked via DEFAULT_MASKING_VALUE (0.0)"]
+    CLS_U2["🛡️ User 2 (HQ Compliance Auditor — RAW_DATA_ACCESS_POLICY):\n• RLS: Sees ALL 16 Malaysian States (4 Central + 12 Other = 100,000 rows)\n• CIF_ID (customer_id): UNMASKED Cleartext ID ('CIF-0000001')\n• CIF_NM (customer_name): UNMASKED Full Cleartext Name ('MUHAMMAD FAIZ BIN AHMAD')\n• B_NetIncome (financial_amount): UNMASKED Exact Monthly Net Income (RM 5,400.00)"]
   end
 
   GOLD --> RLS_U1 & RLS_U2
@@ -40,19 +40,21 @@ flowchart TB
 
 ---
 
-## 2. Step-by-Step Pure SQL Walkthrough
+## 2. Step-by-Step Governance Walkthrough
 
 | Step | Notebook Cell Magic | Identity Running Query | What Happens & What You Observe |
 | :--- | :--- | :--- | :--- |
-| **Step 0** | Python (`%run setup_rls_cls_identities.py`) | Admin Setup | Auto-detects `PROJECT_ID`, clears any prior Row Access Policies, provisions **User 2** (`serviceAccount:acsm-compliance-auditor-sa@<PROJECT_ID>.iam.gserviceaccount.com`), and registers the `%%bigquery_as_sa` SQL magic. |
-| **Step 1.1** | `%%bigquery` | **User 1 (`user:<USER_EMAIL>`)** | **Baseline Inspection (Before Security Policies)**: Queries `acsm_gold.gold_aeon_customer360_profile` showing **`100,000` visible customers across all `16` Malaysian states**, with raw unmasked customer names (`CIF_NM`) and exact monthly net income (`B_NetIncome`). |
+| **Step 0** | Python (`%run setup_rls_cls_identities.py`) | Admin Setup | Auto-detects `PROJECT_ID`, clears any prior Row Access Policies and Column Data Governance Tags, provisions **User 2** (`serviceAccount:acsm-compliance-auditor-sa@<PROJECT_ID>.iam.gserviceaccount.com`), and registers the `%%bigquery_as_sa` SQL magic. |
+| **Step 1.1** | `%%bigquery` | **User 1 (`user:<USER_EMAIL>`)** | **Baseline Inspection (Before Security Policies)**: Queries `acsm_gold.gold_aeon_customer360_profile` showing **`100,000` visible customers across all `16` Malaysian states**, with raw unmasked `CIF_ID`, `CIF_NM`, and exact `B_NetIncome`. |
 | **Step 1.2a** | `%%bigquery` | Policy DDL | **Apply Both Row-Level Security (RLS) Policies (`CREATE OR REPLACE ROW ACCESS POLICY`)**:<br>1. `rlp_central_region_branch_manager` $\rightarrow$ granted to **User 1 (`user:<USER_EMAIL>`)**, filtering `State IN ('Selangor', 'Kuala Lumpur', 'Putrajaya', 'Negeri Sembilan')`.<br>2. `rlp_hq_compliance_all_states` $\rightarrow$ granted to **User 2 (`serviceAccount:acsm-compliance-auditor-sa@<PROJECT_ID>.iam.gserviceaccount.com`)**, filtering `TRUE` (all 16 states). |
 | **Step 1.2b** | `%%bigquery` | **👤 User 1 (`user:<USER_EMAIL>`)** | **Verify RLS as User 1 (Restricted Regional Manager)**: Runs `SELECT State, COUNT(*) ... FROM acsm_gold.gold_aeon_customer360_profile GROUP BY State` with **no `WHERE` clause** — returns **ONLY 4 rows** (`Selangor`, `Kuala Lumpur`, `Putrajaya`, `Negeri Sembilan` — `~25,000` customers). All 12 other Malaysian states are filtered out! |
-| **Step 1.2c** | `%%bigquery_as_sa` | **🛡️ User 2 (`acsm-compliance-auditor-sa`)** | **Verify RLS as User 2 (HQ Compliance Auditor) Running the Exact Same Query**: Runs the **exact same `SELECT State, COUNT(*) ...` query** as `acsm-compliance-auditor-sa@<PROJECT_ID>.iam.gserviceaccount.com` — returns **ALL 16 Malaysian states** (the 4 Central Region states **PLUS all 12 other Malaysian states**: `Johor`, `Penang`, `Perak`, `Kedah`, `Kelantan`, `Melaka`, `Pahang`, `Perlis`, `Sabah`, `Sarawak`, `Terengganu`, `Labuan` = `100,000` customers)! |
-| **Step 1.3a** | `%%bigquery` | View DDL | **Apply Column-Level Security & Dynamic Data Masking (`CREATE OR REPLACE VIEW acsm_gold.vw_customer360_rls_cls_masked`)**: Evaluates `SESSION_USER()` dynamically so **User 1** receives masked PII (`'MU****AD'`, SHA-256 hash, `0.0` net income) while **User 2 (`acsm-compliance-auditor-sa`)** receives unmasked cleartext `CIF_NM` and exact `B_NetIncome`. |
-| **Step 1.3b** | `%%bigquery` | **👤 User 1 (`user:<USER_EMAIL>`)** | **Verify CLS + RLS as User 1 (Restricted Regional Manager)**: Queries `acsm_gold.vw_customer360_rls_cls_masked` as `user:<USER_EMAIL>` — returns **only Central Region states**, **masked customer names (`'MU****AD'`)**, **SHA-256 hashes**, and **masked net income (`0.0`)**. |
-| **Step 1.3c** | `%%bigquery_as_sa` | **🛡️ User 2 (`acsm-compliance-auditor-sa`)** | **Verify CLS + RLS as User 2 (HQ Compliance Auditor) Running the Exact Same Query**: Runs the **exact same SQL query** on `acsm_gold.vw_customer360_rls_cls_masked` as `acsm-compliance-auditor-sa@<PROJECT_ID>.iam.gserviceaccount.com` — returns **all 16 Malaysian states**, **unmasked full customer names (`'MUHAMMAD FAIZ BIN AHMAD'`)**, and **unmasked exact monthly net income (`RM 5,400.00`)**! |
-| **Step 1.4** | `%%bigquery` | Policy Reset | **1-Click Pure SQL Policy Reset (`DROP ALL ROW ACCESS POLICIES`)**: Drops the Row Access Policies on `acsm_gold.gold_aeon_customer360_profile` and verifies all **`100,000` customers across all `16` Malaysian states** are restored for downstream Notebooks 04–05 and Tracks 2–4. |
+| **Step 1.2c** | `%%bigquery_as_sa` | **🛡️ User 2 (`acsm-compliance-auditor-sa`)** | **Verify RLS as User 2 (HQ Compliance Auditor) Running the Exact Same Query**: Runs the **exact same `SELECT State, COUNT(*) ...` query** as `acsm-compliance-auditor-sa@<PROJECT_ID>.iam.gserviceaccount.com` — returns **ALL 16 Malaysian states** (the 4 Central Region states **PLUS all 12 other Malaysian states** = `100,000` customers)! |
+| **Step 1.3a** | Python (`setup_cls_data_governance_tags.py`) | Tag & Data Policy API v2 | **Provision IAM Data Governance Tags & BigQuery Data Policies v2**:<br>• Creates Cloud Resource Manager Tag Key `<PROJECT_ID>/pii_classification` (`purpose=DATA_GOVERNANCE`) and **4 Tag Values** (`customer_name`, `customer_id`, `financial_amount`, `credit_bureau_score`).<br>• Creates `RAW_DATA_ACCESS_POLICY` v2 granting **User 2** unmasked access across all 4 tags.<br>• Creates `DATA_MASKING_POLICY` v2 (`SHA256`, `LAST_FOUR_CHARACTERS`, `DEFAULT_MASKING_VALUE`) granting **User 1** masked access on `customer_name`, `customer_id`, and `financial_amount`, while granting **NO policy** on `credit_bureau_score` (`latest_ctos_score`) so **User 1** is strictly blocked (`403 Access Denied`) from querying `latest_ctos_score`! |
+| **Step 1.3b** | `%%bigquery` | Column Tag DDL + Audit | **Attach IAM Data Governance Tags via Pure BigQuery SQL DDL (`ALTER TABLE ... ALTER COLUMN ... SET OPTIONS (data_governance_tags=[...])`)**: Attaches tags directly to `CIF_NM`, `CIF_ID`, `B_NetIncome`, and `latest_ctos_score` on `acsm_gold.gold_aeon_customer360_profile` and verifies them via `acsm_gold.INFORMATION_SCHEMA.COLUMNS`. |
+| **Step 1.3c** | `%%bigquery_expect_access_denied` | **👤 User 1 (`user:<USER_EMAIL>`)** | **Verify Strict Column Access Denial (`403 Access Denied`) as User 1**: User 1 attempts to query `latest_ctos_score` (`SELECT ..., latest_ctos_score FROM acsm_gold.gold_aeon_customer360_profile`). Because `credit_bureau_score` has no policy for User 1, BigQuery **blocks the query with `403 Access Denied`** (`User does not have masked access or raw data access to data governance tag protected columns`)! |
+| **Step 1.3d** | `%%bigquery` | **👤 User 1 (`user:<USER_EMAIL>`)** | **Verify CLS Dynamic Data Masking + RLS as User 1 (Omitting `latest_ctos_score`)**: User 1 omits the prohibited `latest_ctos_score` column and queries `acsm_gold.gold_aeon_customer360_profile` — returns **only 4 Central Region states**, **`CIF_ID` masked via `LAST_FOUR_CHARACTERS` (`'XXXXX...'`)**, **`CIF_NM` masked via `SHA256` hash**, and **`B_NetIncome` masked via `DEFAULT_MASKING_VALUE` (`0.0`)**. |
+| **Step 1.3e** | `%%bigquery_as_sa` | **🛡️ User 2 (`acsm-compliance-auditor-sa`)** | **Verify Full Unmasked CLS + RLS Including `latest_ctos_score` as User 2 (HQ Compliance Auditor)**: Runs the query **including `latest_ctos_score`, `CIF_ID`, `CIF_NM`, and `B_NetIncome`** as `acsm-compliance-auditor-sa@<PROJECT_ID>.iam.gserviceaccount.com` — returns **all 16 Malaysian states**, **unmasked `latest_ctos_score`**, **unmasked `CIF_ID`**, **unmasked `CIF_NM`**, and **unmasked `B_NetIncome`**! |
+| **Step 1.4** | `%%bigquery` | Policy & Tag Reset | **1-Click Pure SQL Security Reset (`DROP ALL ROW ACCESS POLICIES` + `ALTER COLUMN ... SET OPTIONS (data_governance_tags=[])`)**: Removes both Row Access Policies and all 4 Column Data Governance Tags on `acsm_gold.gold_aeon_customer360_profile`, restoring all **`100,000` unmasked customers across all `16` Malaysian states** for downstream Notebooks 04–05 and Tracks 2–4. |
 | **Step 1.5a** | Python (`sync_business_glossary.py`) | Catalog Sync | Reads [`business_glossary_acsm.yaml` ↗](https://github.com/arvind-dhariwal/aeon-credit-gcp-workshop/blob/main/track1_platform_governance/scripts/business_glossary_acsm.yaml), provisions/updates the Dataplex Business Glossary (`acsm-enterprise-credit-glossary`), 4 Categories, and 10 Terms in `asia-southeast1`, and materializes `acsm_gold.business_glossary_catalog`. |
 | **Step 1.5b** | `%%bigquery` | **User 1 (`user:<USER_EMAIL>`)** | Queries all **10 standardized ACSM business terms**, their categories, synonyms, linked BigQuery columns, and assigned data stewards in pure BigQuery SQL. |
 
@@ -106,73 +108,71 @@ ORDER BY visible_customers DESC;
 
 ---
 
-### 2.2 Deep-Dive: How to Validate Column-Level Security (CLS) & Dynamic Data Masking with Both Users (`Step 1.3a` – `Step 1.3c`)
+### 2.2 Deep-Dive: How to Validate Column-Level Security (CLS) — Strict `403 Access Denied` & Dynamic Data Masking with IAM Data Governance Tags (`Step 1.3a` – `Step 1.3e`)
 
-#### A. Governed CLS View Created in `Step 1.3a` (`acsm_gold.vw_customer360_rls_cls_masked`)
+#### Why IAM Data Governance Tags (`purpose=DATA_GOVERNANCE`) Over Legacy Policy Tags / SQL Views ([Google Cloud Blog Reference](https://cloud.google.com/blog/products/data-analytics/level-up-your-column-level-security-using-iam-data-governance-tags-in-bigquery))
+1. **Global Scope, Regional Enforcement**: Unlike legacy policy tags (which are regional-only), IAM Data Governance Tags (`<PROJECT_ID>/pii_classification`) are global resources in Cloud Resource Manager (`--purpose=DATA_GOVERNANCE`), while BigQuery Data Policies (`RAW_DATA_ACCESS_POLICY`, `DATA_MASKING_POLICY`) are enforced regionally (`asia-southeast1`).
+2. **Managed Disaster Recovery**: Data governance tags and their associated data policies are automatically replicated to secondary regions during failover.
+3. **Hierarchical Security (Up to 5 Levels Deep)**: Supports hierarchical tag value trees up to 5 levels deep (e.g., `pii -> private -> email`) for granular classification and inheritance.
+4. **Decoupled Governance & Zero SQL Wrapper Views**: Sensitive columns on `acsm_gold.gold_aeon_customer360_profile` are tagged directly in place via `ALTER TABLE ... ALTER COLUMN ... SET OPTIONS (data_governance_tags=[...])` (or via `bq update --schema=schema.json` using `dataGovernanceTagsInfo.dataGovernanceTags`) — **no separate `_masked` SQL view required!** Access control activates once a `DATA_MASKING_POLICY` or `RAW_DATA_ACCESS_POLICY` is defined for that tag.
+
+#### A. Attach All 4 IAM Data Governance Tags Directly to Columns via SQL DDL (`Step 1.3b`)
+After `Step 1.3a` (`setup_cls_data_governance_tags.py`) provisions the Cloud Resource Manager Tag Key (`<PROJECT_ID>/pii_classification` with `purpose=DATA_GOVERNANCE`), the 4 Tag Values (`customer_name`, `customer_id`, `financial_amount`, `credit_bureau_score`), and the BigQuery Data Policies v2 (`RAW_DATA_ACCESS_POLICY` for User 2 across all 4 tags; `DATA_MASKING_POLICY` for User 1 on 3 tags; and **NO policy for User 1** on `credit_bureau_score`), `Step 1.3b` attaches the tags directly to the physical table columns in pure SQL and verifies them via `INFORMATION_SCHEMA.COLUMNS`:
 ```sql
-CREATE OR REPLACE VIEW `acsm_gold.vw_customer360_rls_cls_masked` AS
+EXECUTE IMMEDIATE FORMAT("""
+  ALTER TABLE `acsm_gold.gold_aeon_customer360_profile`
+  ALTER COLUMN CIF_NM
+  SET OPTIONS (data_governance_tags=[('%s/pii_classification', 'customer_name')])
+""", @@project_id);
+
+EXECUTE IMMEDIATE FORMAT("""
+  ALTER TABLE `acsm_gold.gold_aeon_customer360_profile`
+  ALTER COLUMN CIF_ID
+  SET OPTIONS (data_governance_tags=[('%s/pii_classification', 'customer_id')])
+""", @@project_id);
+
+EXECUTE IMMEDIATE FORMAT("""
+  ALTER TABLE `acsm_gold.gold_aeon_customer360_profile`
+  ALTER COLUMN B_NetIncome
+  SET OPTIONS (data_governance_tags=[('%s/pii_classification', 'financial_amount')])
+""", @@project_id);
+
+EXECUTE IMMEDIATE FORMAT("""
+  ALTER TABLE `acsm_gold.gold_aeon_customer360_profile`
+  ALTER COLUMN latest_ctos_score
+  SET OPTIONS (data_governance_tags=[('%s/pii_classification', 'credit_bureau_score')])
+""", @@project_id);
+
 SELECT
-  CIF_ID,
-  -- Rule 1: Partial String Redaction ('MU****AD' for User 1; Full Cleartext Name for User 2)
-  CASE
-    WHEN SESSION_USER() LIKE 'acsm-compliance-auditor-sa@%'
-      OR SESSION_USER() LIKE '%compliance%'
-      OR SESSION_USER() LIKE '%credit-control%'
-      THEN CIF_NM
-    ELSE CONCAT(SUBSTR(CIF_NM, 1, 2), '****', SUBSTR(CIF_NM, -2))
-  END AS cif_nm_partial_masked,
-  -- Rule 2: Cryptographic SHA-256 Hash Masking
-  TO_HEX(SHA256(CAST(CIF_NM AS STRING))) AS cif_nm_sha256_masked,
-  State AS rls_central_region_state,
-  Occupation,
-  -- Rule 3: Default Value (0.0) Masking on Monthly Net Income (0.0 for User 1; Exact MYR Income for User 2)
-  CASE
-    WHEN SESSION_USER() LIKE 'acsm-compliance-auditor-sa@%'
-      OR SESSION_USER() LIKE '%compliance%'
-      OR SESSION_USER() LIKE '%credit-control%'
-      THEN B_NetIncome
-    ELSE 0.0
-  END AS net_income_masked_default_0,
-  -- Rule 4: Generalized BNM Household Income Tier Band (Safe for All Users)
-  CASE
-    WHEN B_NetIncome < 3000 THEN 'B40 (< RM 3,000)'
-    WHEN B_NetIncome BETWEEN 3000 AND 7000 THEN 'M40 (RM 3,000 - RM 7,000)'
-    ELSE 'T20 (> RM 7,000)'
-  END AS bnm_income_tier_band,
-  B_AnnualIncome AS annual_income_unmasked_comparison,
-  avg_ep_dsr,
-  active_card_count
-FROM `acsm_gold.gold_aeon_customer360_profile`;
+  table_schema AS dataset_id,
+  table_name,
+  column_name,
+  data_type,
+  data_governance_tags[SAFE_OFFSET(0)].key AS tag_key,
+  data_governance_tags[SAFE_OFFSET(0)].value AS tag_value
+FROM `acsm_gold.INFORMATION_SCHEMA.COLUMNS`
+WHERE table_name = 'gold_aeon_customer360_profile'
+  AND ARRAY_LENGTH(data_governance_tags) > 0
+ORDER BY column_name;
 ```
 
-#### B. Exact Same CLS + RLS Query Run by Both Users (`Step 1.3b` vs `Step 1.3c`)
-Both **Step 1.3b** (`%%bigquery` as **User 1: `user:<USER_EMAIL>`**) and **Step 1.3c** (`%%bigquery_as_sa` as **User 2: `serviceAccount:acsm-compliance-auditor-sa@<PROJECT_ID>.iam.gserviceaccount.com`**) execute this **exact same SQL query**:
-```sql
-SELECT
-  SESSION_USER() AS queried_by_user,
-  CIF_ID,
-  cif_nm_partial_masked,
-  SUBSTR(cif_nm_sha256_masked, 1, 16) AS cif_nm_sha256_prefix,
-  rls_central_region_state,
-  Occupation,
-  net_income_masked_default_0,
-  bnm_income_tier_band,
-  avg_ep_dsr,
-  active_card_count
-FROM `acsm_gold.vw_customer360_rls_cls_masked`
-ORDER BY CIF_ID
-LIMIT 10;
-```
+#### B. Test All 3 CLS Enforcement Modes (`Step 1.3c`, `Step 1.3d`, `Step 1.3e`)
+1. **🚫 Mode 1 — Strict Column Access Denial (`Step 1.3c` as 👤 User 1)**:
+   When **👤 User 1** attempts to query `latest_ctos_score` (`SELECT SESSION_USER() AS queried_by_user, CIF_ID, CIF_NM, State, B_NetIncome, latest_ctos_score FROM acsm_gold.gold_aeon_customer360_profile LIMIT 5`), BigQuery **blocks the query with HTTP `403 Access Denied`** (`User does not have masked access or raw data access to data governance tag protected columns`)!
+2. **🎭 Mode 2 — Dynamic Data Masking (`Step 1.3d` as 👤 User 1, Omitting `latest_ctos_score`)**:
+   When **👤 User 1** omits `latest_ctos_score` (or uses `SELECT * EXCEPT(latest_ctos_score)`), the query succeeds and returns masked `CIF_ID` (`XXXXX0001`), masked `CIF_NM` (`SHA256`), and masked `B_NetIncome` (`0.0`) for the 4 Central Region states.
+3. **🛡️ Mode 3 — Full Unmasked Raw Access (`Step 1.3e` as 🛡️ User 2, Including `latest_ctos_score`)**:
+   When **🛡️ User 2 (`acsm-compliance-auditor-sa@...`)** runs the query **including `latest_ctos_score`, `CIF_ID`, `CIF_NM`, and `B_NetIncome`**, the query succeeds across all 16 Malaysian states and returns all 4 protected columns in full unmasked cleartext!
 
 #### C. Side-by-Side Comparison of CLS + RLS Query Results
-| Output Column | 👤 Step 1.3b Result — User 1 (`user:<USER_EMAIL>`) | 🛡️ Step 1.3c Result — User 2 (`acsm-compliance-auditor-sa@<PROJECT_ID>.iam.gserviceaccount.com`) |
-| :--- | :--- | :--- |
-| **`queried_by_user`** | `<USER_EMAIL>` | `acsm-compliance-auditor-sa@<PROJECT_ID>.iam.gserviceaccount.com` |
-| **`rls_central_region_state` (RLS)** | **ONLY 4 Central Region States** (`Selangor`, `Kuala Lumpur`, `Putrajaya`, `Negeri Sembilan`) | **All 16 Malaysian States** (`Johor`, `Penang`, `Sabah`, `Sarawak`, `Selangor`, etc.) |
-| **`cif_nm_partial_masked` (CLS Rule 1)** | **MASKED (`'MU****AD'`, `'NU****IL'`)** | **UNMASKED Cleartext (`'MUHAMMAD FAIZ BIN AHMAD'`, `'NURUL AINA BINTI ISMAIL'`)** |
-| **`cif_nm_sha256_prefix` (CLS Rule 2)** | **SHA-256 Hash (`'8f4b2c91e03a1d7c'`)** | **SHA-256 Hash (`'8f4b2c91e03a1d7c'`)** |
-| **`net_income_masked_default_0` (CLS Rule 3)** | **MASKED to `0.0`** | **UNMASKED Exact Monthly Net Income (`5400.00`, `8250.00` MYR)** |
-| **`bnm_income_tier_band` (Safe Band)** | `M40 (RM 3,000 - RM 7,000)` / `T20 (> RM 7,000)` | `M40 (RM 3,000 - RM 7,000)` / `T20 (> RM 7,000)` |
+| Output Column | IAM Data Governance Tag | 👤 User 1 (`user:<USER_EMAIL>`) — `Step 1.3c` / `Step 1.3d` | 🛡️ User 2 (`acsm-compliance-auditor-sa@...`) — `Step 1.3e` (`RAW_DATA_ACCESS_POLICY`) |
+| :--- | :--- | :--- | :--- |
+| **`queried_by_user`** | *(Session Identity)* | `<USER_EMAIL>` | `acsm-compliance-auditor-sa@<PROJECT_ID>.iam.gserviceaccount.com` |
+| **`State` (RLS)** | `ROW ACCESS POLICY` | **ONLY 4 Central Region States** (`Selangor`, `Kuala Lumpur`, `Putrajaya`, `Negeri Sembilan`) | **All 16 Malaysian States** (`Johor`, `Penang`, `Sabah`, `Sarawak`, `Selangor`, etc.) |
+| **`latest_ctos_score` (CLS)** | `credit_bureau_score` (**Restricted**) | **🚫 `403 ACCESS DENIED` in `Step 1.3c` (Cannot query column at all!)** | **UNMASKED CTOS Bureau Score (`745`, `680`)** |
+| **`CIF_ID` (CLS)** | `customer_id` (`LAST_FOUR_CHARACTERS`) | **MASKED (`'XXXXX0001'`)** in `Step 1.3d` | **UNMASKED Cleartext (`'CIF-0000001'`)** |
+| **`CIF_NM` (CLS)** | `customer_name` (`SHA256`) | **MASKED (`SHA256` cryptographic hash)** in `Step 1.3d` | **UNMASKED Cleartext (`'MUHAMMAD FAIZ BIN AHMAD'`)** |
+| **`B_NetIncome` (CLS)** | `financial_amount` (`DEFAULT_MASKING_VALUE`) | **MASKED to `0.0`** in `Step 1.3d` | **UNMASKED Exact Monthly Net Income (`5400.00`, `8250.00` MYR)** |
 
 ---
 
@@ -194,7 +194,7 @@ In Google Cloud **Dataplex Universal Catalog (Knowledge Catalog)**, a **Business
 | Category (`Category ID`) | Business Term (`Term ID`) | Standardized Business Definition | Synonyms & Related Terms | Linked BigQuery Columns (`Schema.<COLUMN>`) |
 | :--- | :--- | :--- | :--- | :--- |
 | **1. Customer Identity & PDPA Consent**<br>(`customer-identity-pdpa`) | **Customer Information File ID**<br>(`cif-id`) | Unique master customer identifier assigned by ACSM's core Customer Information File (`m3CIF`) across Easy Payment (`EP`), Credit Card (`CC`), and Personal Financing (`PF`) lines. | **Synonym**: `Master Customer Number`<br>**Related**: `PDPA Marketing Consent Flag` | • `acsm_gold.gold_aeon_customer360_profile.CIF_ID`<br>• `acsm_bronze.m3CIF.CIF_ID` |
-| **1. Customer Identity & PDPA Consent**<br>(`customer-identity-pdpa`) | **BNM Household Income Tier (B40 / M40 / T20)**<br>(`bnm-household-income-tier`) | Standardized Malaysian household income classification based on monthly net income (`B_NetIncome`): **B40** (`< RM 3,000`), **M40** (`RM 3,000 – RM 7,000`), and **T20** (`> RM 7,000`). Used for BNM reporting and PDPA dynamic income masking. | **Related**: `Net Disposable Income (NDI)`, `Debt Service Ratio (DSR %)` | • `acsm_gold.gold_aeon_customer360_profile.B_NetIncome`<br>• `acsm_gold.vw_customer360_rls_cls_masked.bnm_income_tier_band` |
+| **1. Customer Identity & PDPA Consent**<br>(`customer-identity-pdpa`) | **BNM Household Income Tier (B40 / M40 / T20)**<br>(`bnm-household-income-tier`) | Standardized Malaysian household income classification based on monthly net income (`B_NetIncome`): **B40** (`< RM 3,000`), **M40** (`RM 3,000 – RM 7,000`), and **T20** (`> RM 7,000`). Used for BNM reporting and PDPA dynamic income masking. | **Related**: `Net Disposable Income (NDI)`, `Debt Service Ratio (DSR %)` | • `acsm_gold.gold_aeon_customer360_profile.B_NetIncome`<br>• `acsm_bronze.m3CIF.B_NetIncome` |
 | **1. Customer Identity & PDPA Consent**<br>(`customer-identity-pdpa`) | **PDPA Marketing Consent Flag**<br>(`pdpa-marketing-consent`) | Explicit customer opt-in indicator (`RecvPromo_FG = 'Y'`) required under Malaysian PDPA 2010 before targeting a customer with cross-sell or promotional campaigns. | **Related**: `Customer Information File ID` | • `acsm_gold.gold_aeon_customer360_profile.RecvPromo_FG`<br>• `acsm_bronze.m3CIF.RecvPromo_FG` |
 | **2. Credit Underwriting & BNM Regulatory Metrics**<br>(`underwriting-bnm-credit-risk`) | **Debt Service Ratio (DSR %)**<br>(`debt-service-ratio-dsr`) | Ratio of total monthly debt obligations (ACSM + CCRIS) to monthly net income (`DSR %`). Under BNM Responsible Financing Guidelines, `DSR > 60%` requires enhanced underwriting review and `DSR > 100%` is quarantined by AutoDQ. | **Synonym**: `Monthly Debt Burden Ratio`<br>**Related**: `Net Disposable Income (NDI)`, `CTOS External Credit Bureau Score` | • `acsm_gold.gold_aeon_customer360_profile.avg_ep_dsr`<br>• `acsm_bronze.Fact_EP_Judge.DSR` |
 | **2. Credit Underwriting & BNM Regulatory Metrics**<br>(`underwriting-bnm-credit-risk`) | **Net Disposable Income (NDI MYR)**<br>(`net-disposable-income-ndi`) | Remaining monthly income in Malaysian Ringgit (`MYR`) after deducting statutory contributions, existing financing instalments, and minimum living expenditure buffers. | **Related**: `Debt Service Ratio (DSR %)`, `BNM Household Income Tier` | • `acsm_gold.gold_aeon_customer360_profile.avg_ep_ndi`<br>• `acsm_bronze.Fact_EP_Judge.NDI` |
@@ -208,4 +208,4 @@ In Google Cloud **Dataplex Universal Catalog (Knowledge Catalog)**, a **Business
 1. **Create / Inspect the Glossary (`3 Mins`)**: Open **Knowledge Catalog $\rightarrow$ Glossaries** (`https://console.cloud.google.com/dataplex/dp-glossaries`), expand `ACSM Enterprise Consumer Finance & Regulatory Glossary` (`asia-southeast1`), and walk through the 4 categories and 10 business terms.
 2. **Attach Terms to Physical BigQuery Columns (`3 Mins`)**: Open `acsm_gold.gold_aeon_customer360_profile` $\rightarrow$ **Schema** tab, select `avg_ep_dsr`, `ep_unpaid_osp`, and `B_NetIncome`, and click **Add business term** to attach **`Debt Service Ratio (DSR %)`**, **`Unpaid Outstanding Principal (OSP MYR)`**, and **`BNM Household Income Tier (B40 / M40 / T20)`**.
 3. **Demonstrate Semantic Search by Business Concept (`2 Mins`)**: Search `"Delinquent Principal Exposure"` or `"Debt Service Ratio"` in **Knowledge Catalog Search** (`https://console.cloud.google.com/dataplex/dp-search`) and show how `acsm_gold.gold_aeon_customer360_profile` surfaces immediately via its attached glossary term even though the physical columns are named `ep_unpaid_osp` and `avg_ep_dsr`.
-4. **Connect Glossary to RLS/CLS Masking & Conversational Analytics (`3 Mins`)**: Show how Category 1 terms (`Customer Information File ID` & `BNM Household Income Tier`) govern the dynamic masking policies in **Step 1.3** (`vw_customer360_rls_cls_masked`), and how the 10 attached terms are automatically ingested by **BigQuery Conversational Analytics (`BQCA`)** in Track 1 Notebook 05 and Track 3.
+4. **Connect Glossary to IAM Data Governance Tag CLS Masking & Conversational Analytics (`3 Mins`)**: Show how Category 1 terms (`Customer Information File ID` & `BNM Household Income Tier`) align with the IAM Data Governance Tag (`<PROJECT_ID>/pii_classification`) dynamic masking policies in **Step 1.3** on `acsm_gold.gold_aeon_customer360_profile`, and how the 10 attached terms are automatically ingested by **BigQuery Conversational Analytics (`BQCA`)** in Track 1 Notebook 05 and Track 3.
