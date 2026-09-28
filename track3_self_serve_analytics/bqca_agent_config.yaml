@@ -1,85 +1,66 @@
 # =============================================================================
-# BIGQUERY CONVERSATIONAL ANALYTICS (BQCA) & PROPERTY GRAPH AGENT CONFIGURATION
+# BIGQUERY CONVERSATIONAL ANALYTICS (BQCA) — GRAPH-BASED DATA AGENT CONFIG
 # Fulfils ACSM RFP Clauses C1.1.2.9, C1.1.2.10, and Annexure M (M1.4.2, M1.4.4)
 # Used by Track 1 Notebook 06 (`06_BigQuery_Conversational_Analytics_Agent.ipynb`)
 # =============================================================================
 
-agent_id: "acsm-aeon360-bqca-agent"
-display_name: "ACSM AEON360 Conversational Analytics & Graph Agent"
-target_tables:
-  - "acsm_gold.gold_aeon_customer360_profile"
-  - "acsm_gold.gold_underwriting_funnel"
-  - "acsm_gold.gold_collections_risk"
-  - "acsm_silver.recon_audit_log"
+agent_id: "acsm-credit-graph-bqca-agent"
+display_name: "ACSM Credit Ecosystem Graph Conversational Analytics Agent"
+description: "Graph-based BigQuery Conversational Analytics (BQCA) Data Agent grounded on acsm_gold.acsm_credit_ecosystem_graph, its 7 Graph Node/Edge tables, imported Dataplex Knowledge Catalog Business Glossary terms, and Dataplex Data Insights sample queries."
+
+knowledge_catalog_glossary:
+  glossary_id: "acsm-enterprise-credit-glossary"
+  location: "asia-southeast1"
+
 target_property_graph: "acsm_gold.acsm_credit_ecosystem_graph"
 
+target_graph_tables:
+  - "acsm_gold.graph_node_customer"
+  - "acsm_gold.graph_node_credit_facility"
+  - "acsm_gold.graph_node_merchant"
+  - "acsm_gold.graph_node_employer_segment"
+  - "acsm_gold.graph_edge_holds_facility"
+  - "acsm_gold.graph_edge_transacted_at"
+  - "acsm_gold.graph_edge_works_in_segment"
+
 system_instructions: |
-  You are the official AEON360 Conversational Analytics Assistant for AEON Credit Service (M) Berhad (ACSM).
+  You are the official AEON360 Graph Conversational Analytics Assistant (`acsm-credit-graph-bqca-agent`) for AEON Credit Service (M) Berhad (ACSM).
+  You answer relationship, contagion, underwriting exposure, employer cluster, and cross-sell path questions over the ACSM Credit Ecosystem Property Graph (`acsm_gold.acsm_credit_ecosystem_graph`) and its 7 underlying Graph Node & Edge tables in `acsm_gold`:
+  - Node Tables: `graph_node_customer`, `graph_node_credit_facility`, `graph_node_merchant`, `graph_node_employer_segment`
+  - Edge Tables: `graph_edge_holds_facility` (Customer -> CreditFacility), `graph_edge_transacted_at` (Customer -> Merchant), `graph_edge_works_in_segment` (Customer -> EmployerSegment)
   All monetary amounts are in Malaysian Ringgit (MYR / RM).
-  Always use these ACSM & Bank Negara Malaysia (BNM) domain definitions:
-  - EP: Easy Payment (installment financing for motorcycles, appliances, and personal financing).
-  - CC: Credit Card products (Platinum, Gold, Silver, Basic tiers).
-  - CIF_ID: Customer Information File unique customer identifier from m3CIF.
-  - OSP: Outstanding Principal balance (billing_osp_myr = billed principal, collection_osp_myr = collected principal, unpaid_osp_myr = overdue unpaid principal).
-  - Collection Efficiency Ratio: SAFE_DIVIDE(SUM(collection_osp_myr), NULLIF(SUM(billing_osp_myr), 0)).
-  - AKPK: Agensi Kaunseling dan Pengurusan Kredit (Malaysian credit counseling and debt restructuring program; akpk_indicator = 'Y' or akpk_status = 'Y' indicates debt restructuring).
-  - DSR: Debt Service Ratio (monthly debt obligations divided by net income; new_dsr / avg_ep_new_dsr).
-  - FinPlus: ACSM's internal e-credit evaluation tier (finplus_tier).
-  - PDPA Consent: Malaysian Personal Data Protection Act marketing opt-in flag (RecvPromo_FG = 'Y').
+  Always apply the ACSM Business Glossary imported from Dataplex Knowledge Catalog (`acsm-enterprise-credit-glossary`):
+  - CIF_ID (`cif_id`): Master Customer Information File identifier linking Easy Payment (EP) and Credit Card (CC) facilities.
+  - EP / CC (`product_line`): Easy Payment installment financing (`EP`) and AEON Credit Card (`CC`) facilities.
+  - Unpaid_OSP (`combined_unpaid_osp_myr`): Overdue unpaid principal balance in MYR (`is_delinquent = TRUE` when > 0 or `akpk_status = 'Y'`).
+  - DSR (`new_dsr`): Debt Service Ratio governed by Bank Negara Malaysia (BNM) Responsible Financing Guidelines.
+  - AKPK (`akpk_status`): Agensi Kaunseling dan Pengurusan Kredit debt restructuring indicator (`'Y'` / `'N'`).
+  - PDPA Marketing Consent (`pdpa_marketing_consent`): Malaysian PDPA 2010 promotional opt-in indicator (`'Y'` required for cross-sell).
 
-golden_sql_examples:
-  - id: "Q01_PORTFOLIO_DELINQUENCY_BY_STATE"
-    question: "What is our total Billing OSP, Collection OSP, Unpaid OSP, and Collection Efficiency Ratio across Malaysian states?"
+graph_insight_sample_queries:
+  - id: "INSIGHT_Q01_MERCHANT_DELINQUENCY_CONTAGION"
+    graph_tables_used:
+      - "acsm_gold.graph_node_customer"
+      - "acsm_gold.graph_edge_transacted_at"
+      - "acsm_gold.graph_node_merchant"
+    question: "Which merchants have the highest number of delinquent customers transacting there, and what is their total transaction spend and linked unpaid principal (OSP)?"
     sql: |
       SELECT
-        state,
-        product_line,
-        ROUND(SUM(billing_osp_myr), 2) AS total_billing_osp_myr,
-        ROUND(SUM(collection_osp_myr), 2) AS total_collection_osp_myr,
-        ROUND(SUM(unpaid_osp_myr), 2) AS total_unpaid_osp_myr,
-        ROUND(SAFE_DIVIDE(SUM(collection_osp_myr), NULLIF(SUM(billing_osp_myr), 0)) * 100, 2) AS collection_efficiency_pct
-      FROM `acsm_gold.gold_collections_risk`
-      GROUP BY state, product_line
-      ORDER BY total_unpaid_osp_myr DESC;
-
-  - id: "Q02_UNDERWRITING_APPROVAL_FUNNEL"
-    question: "Compare credit application volume, average credit score, and average DSR between Easy Payment (EP) and Credit Cards (CC) by channel."
-    sql: |
-      SELECT
-        product_line,
-        application_channel,
-        decision_status,
-        COUNT(*) AS application_count,
-        ROUND(AVG(credit_score), 1) AS avg_credit_score,
-        ROUND(AVG(new_dsr), 2) AS avg_new_dsr,
-        ROUND(SUM(requested_or_approved_exposure_myr), 2) AS total_exposure_myr
-      FROM `acsm_gold.gold_underwriting_funnel`
-      GROUP BY product_line, application_channel, decision_status
-      ORDER BY product_line, application_count DESC;
-
-  - id: "Q03_EP_TO_CC_CROSS_SELL_CANDIDATES"
-    question: "Find top Easy Payment (EP) customers with zero unpaid delinquency, net income above RM 5,000, and PDPA marketing consent who do not hold an active Credit Card yet."
-    sql: |
-      SELECT
-        CIF_ID,
-        State,
-        Occupation,
-        B_NetIncome,
-        ep_app_count,
-        total_ep_financed_myr,
-        avg_ep_new_dsr
-      FROM `acsm_gold.gold_aeon_customer360_profile`
-      WHERE active_card_count = 0
-        AND ep_app_count > 0
-        AND combined_unpaid_osp = 0
-        AND B_NetIncome >= 5000
-        AND RecvPromo_FG = 'Y'
-      ORDER BY B_NetIncome DESC
-      LIMIT 50;
-
-  - id: "Q04_GQL_MERCHANT_DELINQUENCY_CONTAGION"
-    question: "Which merchants have the highest number of delinquent customers transacting there in our BigQuery Property Graph?"
-    sql: |
+        m.merchant_name,
+        m.merchant_group,
+        COUNT(DISTINCT c.cif_id) AS delinquent_customers_count,
+        ROUND(SUM(t.total_spend_myr), 2) AS delinquent_customer_spend_myr,
+        ROUND(SUM(c.combined_unpaid_osp_myr), 2) AS linked_unpaid_osp_myr
+      FROM `acsm_gold.graph_node_customer` c
+      INNER JOIN `acsm_gold.graph_edge_transacted_at` t
+        ON c.cif_id = t.cif_id
+      INNER JOIN `acsm_gold.graph_node_merchant` m
+        ON t.merchant_id = m.merchant_id
+      WHERE c.is_delinquent = TRUE
+      GROUP BY m.merchant_name, m.merchant_group
+      ORDER BY linked_unpaid_osp_myr DESC
+      LIMIT 15;
+    gql: |
       SELECT
         merchant_name,
         merchant_group,
@@ -100,4 +81,173 @@ golden_sql_examples:
       )
       GROUP BY merchant_name, merchant_group
       ORDER BY linked_unpaid_osp_myr DESC
+      LIMIT 15;
+
+  - id: "INSIGHT_Q02_CUSTOMER_FACILITY_EXPOSURE_AND_DSR"
+    graph_tables_used:
+      - "acsm_gold.graph_node_customer"
+      - "acsm_gold.graph_edge_holds_facility"
+      - "acsm_gold.graph_node_credit_facility"
+    question: "Across our Customer and CreditFacility graph tables, what is the total facility count, total exposure (MYR), average credit score, and average Debt Service Ratio (DSR) by product line (EP vs CC) and application status?"
+    sql: |
+      SELECT
+        f.product_line,
+        f.application_status,
+        COUNT(DISTINCT f.facility_id) AS facility_count,
+        COUNT(DISTINCT c.cif_id) AS distinct_customers,
+        ROUND(AVG(f.credit_score), 1) AS avg_credit_score,
+        ROUND(AVG(f.new_dsr), 2) AS avg_dsr_pct,
+        ROUND(SUM(f.exposure_amount_myr), 2) AS total_exposure_myr
+      FROM `acsm_gold.graph_node_customer` c
+      INNER JOIN `acsm_gold.graph_edge_holds_facility` h
+        ON c.cif_id = h.cif_id
+      INNER JOIN `acsm_gold.graph_node_credit_facility` f
+        ON h.facility_id = f.facility_id
+      GROUP BY f.product_line, f.application_status
+      ORDER BY f.product_line, facility_count DESC;
+    gql: |
+      SELECT
+        product_line,
+        application_status,
+        COUNT(DISTINCT facility_id) AS facility_count,
+        COUNT(DISTINCT cif_id) AS distinct_customers,
+        ROUND(AVG(credit_score), 1) AS avg_credit_score,
+        ROUND(AVG(new_dsr), 2) AS avg_dsr_pct,
+        ROUND(SUM(exposure_amount_myr), 2) AS total_exposure_myr
+      FROM GRAPH_TABLE(
+        `acsm_gold.acsm_credit_ecosystem_graph`
+        MATCH (c:Customer)-[h:HOLDS_FACILITY]->(f:CreditFacility)
+        COLUMNS (
+          c.cif_id AS cif_id,
+          f.facility_id AS facility_id,
+          f.product_line AS product_line,
+          f.application_status AS application_status,
+          f.credit_score AS credit_score,
+          f.new_dsr AS new_dsr,
+          f.exposure_amount_myr AS exposure_amount_myr
+        )
+      )
+      GROUP BY product_line, application_status
+      ORDER BY product_line, facility_count DESC;
+
+  - id: "INSIGHT_Q03_EMPLOYER_SEGMENT_DELINQUENCY_CLUSTERS"
+    graph_tables_used:
+      - "acsm_gold.graph_node_customer"
+      - "acsm_gold.graph_edge_works_in_segment"
+      - "acsm_gold.graph_node_employer_segment"
+    question: "Which employer and state segments in the graph have the highest concentration of delinquent customers, linked unpaid principal (OSP), and AKPK restructuring accounts?"
+    sql: |
+      SELECT
+        e.employer_segment_id,
+        e.employer_or_nob,
+        e.state,
+        COUNT(DISTINCT c.cif_id) AS total_customers_in_segment,
+        COUNTIF(c.is_delinquent = TRUE) AS delinquent_customers,
+        COUNTIF(c.akpk_status = 'Y') AS akpk_restructured_customers,
+        ROUND(AVG(w.years_in_job), 1) AS avg_years_in_job,
+        ROUND(SUM(c.combined_unpaid_osp_myr), 2) AS segment_unpaid_osp_myr
+      FROM `acsm_gold.graph_node_customer` c
+      INNER JOIN `acsm_gold.graph_edge_works_in_segment` w
+        ON c.cif_id = w.cif_id
+      INNER JOIN `acsm_gold.graph_node_employer_segment` e
+        ON w.employer_segment_id = e.employer_segment_id
+      GROUP BY e.employer_segment_id, e.employer_or_nob, e.state
+      HAVING delinquent_customers > 0
+      ORDER BY segment_unpaid_osp_myr DESC
+      LIMIT 15;
+    gql: |
+      SELECT
+        employer_segment_id,
+        employer_or_nob,
+        state,
+        COUNT(DISTINCT cif_id) AS total_customers_in_segment,
+        COUNTIF(is_delinquent = TRUE) AS delinquent_customers,
+        COUNTIF(akpk_status = 'Y') AS akpk_restructured_customers,
+        ROUND(AVG(years_in_job), 1) AS avg_years_in_job,
+        ROUND(SUM(combined_unpaid_osp_myr), 2) AS segment_unpaid_osp_myr
+      FROM GRAPH_TABLE(
+        `acsm_gold.acsm_credit_ecosystem_graph`
+        MATCH (c:Customer)-[w:WORKS_IN_SEGMENT]->(e:EmployerSegment)
+        COLUMNS (
+          c.cif_id AS cif_id,
+          c.is_delinquent AS is_delinquent,
+          c.akpk_status AS akpk_status,
+          c.combined_unpaid_osp_myr AS combined_unpaid_osp_myr,
+          w.years_in_job AS years_in_job,
+          e.employer_segment_id AS employer_segment_id,
+          e.employer_or_nob AS employer_or_nob,
+          e.state AS state
+        )
+      )
+      GROUP BY employer_segment_id, employer_or_nob, state
+      HAVING delinquent_customers > 0
+      ORDER BY segment_unpaid_osp_myr DESC
+      LIMIT 15;
+
+  - id: "INSIGHT_Q04_GRAPH_PDPA_EP_TO_CC_CROSS_SELL_PATHS"
+    graph_tables_used:
+      - "acsm_gold.graph_node_customer"
+      - "acsm_gold.graph_edge_holds_facility"
+      - "acsm_gold.graph_node_credit_facility"
+      - "acsm_gold.graph_edge_transacted_at"
+      - "acsm_gold.graph_node_merchant"
+    question: "Which non-delinquent Easy Payment (EP) customers with PDPA marketing consent and zero active Credit Cards have the highest merchant transaction spend and net income for Credit Card cross-sell?"
+    sql: |
+      SELECT
+        c.cif_id,
+        c.state,
+        c.occupation,
+        c.net_income_myr,
+        COUNT(DISTINCT f.facility_id) AS ep_facility_count,
+        ROUND(MAX(f.credit_score), 1) AS best_ep_credit_score,
+        COUNT(DISTINCT m.merchant_id) AS distinct_merchants_visited,
+        ROUND(SUM(t.total_spend_myr), 2) AS total_merchant_spend_myr
+      FROM `acsm_gold.graph_node_customer` c
+      INNER JOIN `acsm_gold.graph_edge_holds_facility` h
+        ON c.cif_id = h.cif_id
+      INNER JOIN `acsm_gold.graph_node_credit_facility` f
+        ON h.facility_id = f.facility_id
+      INNER JOIN `acsm_gold.graph_edge_transacted_at` t
+        ON c.cif_id = t.cif_id
+      INNER JOIN `acsm_gold.graph_node_merchant` m
+        ON t.merchant_id = m.merchant_id
+      WHERE f.product_line = 'EP'
+        AND c.active_card_count = 0
+        AND c.is_delinquent = FALSE
+        AND c.pdpa_marketing_consent = 'Y'
+        AND c.net_income_myr >= 4000
+      GROUP BY c.cif_id, c.state, c.occupation, c.net_income_myr
+      ORDER BY total_merchant_spend_myr DESC, c.net_income_myr DESC
+      LIMIT 15;
+    gql: |
+      SELECT
+        cif_id,
+        state,
+        occupation,
+        net_income_myr,
+        COUNT(DISTINCT facility_id) AS ep_facility_count,
+        ROUND(MAX(credit_score), 1) AS best_ep_credit_score,
+        COUNT(DISTINCT merchant_id) AS distinct_merchants_visited,
+        ROUND(SUM(total_spend_myr), 2) AS total_merchant_spend_myr
+      FROM GRAPH_TABLE(
+        `acsm_gold.acsm_credit_ecosystem_graph`
+        MATCH (f:CreditFacility)<-[h:HOLDS_FACILITY]-(c:Customer)-[t:TRANSACTED_AT]->(m:Merchant)
+        WHERE f.product_line = 'EP'
+          AND c.active_card_count = 0
+          AND c.is_delinquent = FALSE
+          AND c.pdpa_marketing_consent = 'Y'
+          AND c.net_income_myr >= 4000
+        COLUMNS (
+          c.cif_id AS cif_id,
+          c.state AS state,
+          c.occupation AS occupation,
+          c.net_income_myr AS net_income_myr,
+          f.facility_id AS facility_id,
+          f.credit_score AS credit_score,
+          m.merchant_id AS merchant_id,
+          t.total_spend_myr AS total_spend_myr
+        )
+      )
+      GROUP BY cif_id, state, occupation, net_income_myr
+      ORDER BY total_merchant_spend_myr DESC, net_income_myr DESC
       LIMIT 15;
