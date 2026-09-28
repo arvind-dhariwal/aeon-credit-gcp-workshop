@@ -1,12 +1,12 @@
 -- =============================================================================
 -- TRACK 1: DATA PLATFORM, GOVERNANCE & MODERNIZATION
--- File: 02_medallion_and_reconciliation.sql
+-- File: 02_medallion_silver_and_gold_layer.sql
 --
 -- Demonstrates:
 -- 1. Creation of Silver (`acsm_silver`) & Gold (`acsm_gold`) Medallion Datasets in Singapore (`asia-southeast1`)
 -- 2. Silver Layer Standardization (`silver_customer_cif`, `silver_ep_underwriting`, `silver_cc_underwriting`, `silver_collections_summary`)
 -- 3. Gold Layer AEON 360 Customer Profile (`gold_aeon_customer360_profile`)
--- 4. Dual-Run Automated Row & Financial Reconciliation Audit (`recon_audit_log`)
+-- 4. Silver BQML Delinquency Model (`model_delinquency_propensity`) & Gold Batch Predictions (`gold_aeon360_batch_ml_predictions`)
 -- =============================================================================
 
 CREATE SCHEMA IF NOT EXISTS `acsm_silver`
@@ -251,52 +251,3 @@ FROM ML.PREDICT(
   MODEL `acsm_silver.model_delinquency_propensity`,
   TABLE `acsm_gold.gold_aeon_customer360_profile`
 );
-
--- -----------------------------------------------------------------------------
--- 8. Dual-Run Automated Financial Reconciliation Audit (`acsm_silver.recon_audit_log`)
--- -----------------------------------------------------------------------------
-CREATE OR REPLACE TABLE `acsm_silver.recon_audit_log`
-OPTIONS (
-  description = 'Automated Row-Count and Financial Control Total Reconciliation Audit Table for BNM RMiT & Migration Sign-off.'
-) AS
-WITH checks AS (
-  SELECT
-    'Fact_EP_Judge -> silver_ep_underwriting' AS pipeline_flow,
-    'FIN_AMT (Financed Principal MYR)' AS control_metric,
-    (SELECT COUNT(*) FROM `acsm_bronze.Fact_EP_Judge`) AS bronze_rows,
-    (SELECT COUNT(*) FROM `acsm_silver.silver_ep_underwriting`) AS silver_rows,
-    (SELECT ROUND(SUM(CAST(FIN_AMT AS NUMERIC)), 2) FROM `acsm_bronze.Fact_EP_Judge`) AS bronze_total_myr,
-    (SELECT ROUND(SUM(FIN_AMT), 2) FROM `acsm_silver.silver_ep_underwriting`) AS silver_total_myr
-  UNION ALL
-  SELECT
-    'Fact_CC_Judge -> silver_cc_underwriting' AS pipeline_flow,
-    'B_CrLimit (Approved Credit Limit MYR)' AS control_metric,
-    (SELECT COUNT(*) FROM `acsm_bronze.Fact_CC_Judge`) AS bronze_rows,
-    (SELECT COUNT(*) FROM `acsm_silver.silver_cc_underwriting`) AS silver_rows,
-    (SELECT ROUND(SUM(CAST(B_CrLimit AS NUMERIC)), 2) FROM `acsm_bronze.Fact_CC_Judge`) AS bronze_total_myr,
-    (SELECT ROUND(SUM(B_CrLimit), 2) FROM `acsm_silver.silver_cc_underwriting`) AS silver_total_myr
-  UNION ALL
-  SELECT
-    'Fact_EP_Collection + Fact_CC_Collection -> silver_collections_summary' AS pipeline_flow,
-    'Unpaid_OSP (Combined Unpaid Principal MYR)' AS control_metric,
-    (SELECT COUNT(DISTINCT CIF_No) FROM (
-      SELECT CIF_No FROM `acsm_bronze.Fact_EP_Collection`
-      UNION DISTINCT
-      SELECT CIF_No FROM `acsm_bronze.Fact_CC_Collection`
-    )) AS bronze_rows,
-    (SELECT COUNT(*) FROM `acsm_silver.silver_collections_summary`) AS silver_rows,
-    (SELECT ROUND(SUM(CAST(Unpaid_OSP AS NUMERIC)), 2) FROM `acsm_bronze.Fact_EP_Collection`) +
-      (SELECT ROUND(SUM(CAST(Unpaid_OSP AS NUMERIC)), 2) FROM `acsm_bronze.Fact_CC_Collection`) AS bronze_total_myr,
-    (SELECT ROUND(SUM(combined_unpaid_osp), 2) FROM `acsm_silver.silver_collections_summary`) AS silver_total_myr
-)
-SELECT
-  CURRENT_TIMESTAMP() AS reconciliation_timestamp,
-  pipeline_flow,
-  control_metric,
-  bronze_rows,
-  silver_rows,
-  bronze_total_myr,
-  silver_total_myr,
-  (silver_total_myr - bronze_total_myr) AS variance_myr,
-  IF(bronze_rows = silver_rows AND ABS(silver_total_myr - bronze_total_myr) = 0, 'PASS (0.00 MYR VARIANCE)', 'INVESTIGATE') AS audit_status
-FROM checks;

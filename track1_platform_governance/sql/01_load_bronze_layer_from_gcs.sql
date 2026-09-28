@@ -1,7 +1,10 @@
 -- =============================================================================
+-- TRACK 1: DATA PLATFORM, GOVERNANCE & MODERNIZATION
+-- File: 01_load_bronze_layer_from_gcs.sql
+--
 -- Serverless SQL `LOAD DATA OVERWRITE` from GCS for All 8 `acsm_bronze` Tables
 -- Dynamically resolves `@@project_id` (`gs://acsm-workshop-landing-${PROJECT_ID}/full_compressed/`)
--- into the 8 pre-created `acsm_bronze` tables (`1,398,284` rows) while preserving all 241 column descriptions.
+-- into the 8 pre-created `acsm_bronze` tables (`1,398,284` rows) while preserving all column descriptions.
 -- Zero compute provisioning required | $0 BigQuery batch load cost (0 B billed).
 -- =============================================================================
 

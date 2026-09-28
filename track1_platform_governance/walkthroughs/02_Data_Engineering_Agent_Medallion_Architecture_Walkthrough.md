@@ -21,7 +21,7 @@ Rather than hand-coding hundreds of lines of SQL/PySpark, this notebook showcase
 - **Why It Matters**: Enabling `datalineage.googleapis.com` and granting `roles/datalineage.editor` ensures that every `.sqlx` table built by the Data Engineering Agent automatically populates BigQuery's **Lineage** tab across `acsm_bronze` -> `acsm_silver` -> `acsm_gold`.
 
 ### Step 1 & Step 2: Standalone Bronze Layer Bootstrap & Pre-Flight Check
-- **What Happens**: Invokes [`00_create_8_tables_ddl_with_descriptions.sql`](../sql/00_create_8_tables_ddl_with_descriptions.sql) and [`01_load_data_from_gcs.sql`](../sql/01_load_data_from_gcs.sql) if `acsm_bronze` isn't already populated, then verifies all 8 Bronze tables (`1,900,000` total rows) using pure `%%bigquery` SQL.
+- **What Happens**: Invokes [`00_create_8_tables_ddl_with_descriptions.sql`](../sql/00_create_8_tables_ddl_with_descriptions.sql) and [`01_load_bronze_layer_from_gcs.sql`](../sql/01_load_bronze_layer_from_gcs.sql) if `acsm_bronze` isn't already populated, then verifies all 8 Bronze tables (`1,900,000` total rows) using pure `%%bigquery` SQL.
 
 ### Step 3: Create Target Medallion & Dataform Datasets
 - **What Happens**: Creates `acsm_silver`, `acsm_gold`, and `dataform_assertions` in `asia-southeast1`.
