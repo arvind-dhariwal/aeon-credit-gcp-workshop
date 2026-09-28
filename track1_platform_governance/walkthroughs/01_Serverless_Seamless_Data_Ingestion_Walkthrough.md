@@ -22,9 +22,10 @@ This notebook demonstrates how Google Cloud unifies **all 8 ACSM source tables (
 
 ## 2. Step-by-Step Walkthrough
 
-### Step 0 & Step 1: Environment Setup & Enabling Data Lineage Upfront
-- **What Happens**: Auto-detects `PROJECT_ID`, sets `LOCATION = "asia-southeast1"`, clones the workshop repository, and enables `storage.googleapis.com`, `bigquery.googleapis.com`, `biglake.googleapis.com`, **`datalineage.googleapis.com`**, and **`dataplex.googleapis.com`**.
-- **Why It Matters**: Enabling `datalineage.googleapis.com` before loading Bronze tables guarantees that BigQuery Data Lineage automatically records end-to-end lineage from GCS files -> `acsm_bronze` -> `acsm_silver` -> `acsm_gold`.
+### Step 1: Environment Setup & Enabling Data Lineage Upfront
+- **Prerequisite VPC Script (Admin / Pre-Workshop Setup)**: [`track1_platform_governance/scripts/setup_colab_vpc_network.sh`](../scripts/setup_colab_vpc_network.sh) provisions `acsm-colab-network` and `acsm-colab-subnet-sg` (`asia-southeast1`) outside the notebook.
+- **What Happens in Step 1**: Auto-detects `PROJECT_ID`, sets `LOCATION = "asia-southeast1"`, clones the workshop repository, and enables `storage.googleapis.com`, `bigquery.googleapis.com`, `biglake.googleapis.com`, **`datalineage.googleapis.com`**, and **`dataplex.googleapis.com`**.
+- **Why It Matters**: Enabling `datalineage.googleapis.com` before loading Bronze tables guarantees that BigQuery Data Lineage automatically records end-to-end lineage from GCS/AWS files -> `acsm_bronze` -> `acsm_silver` -> `acsm_gold`.
 
 ### Step 2 & Step 3: Stage Compressed Source Extracts in Google Cloud Storage
 - **What Happens**: Creates `gs://acsm-workshop-landing-{PROJECT_ID}` in `asia-southeast1` with Uniform Bucket-Level Access and uploads the 7 compressed `.csv.gz` extracts (`Fact_EP_*`, `Fact_CC_*`, and `m3CIF.csv.gz`).

@@ -136,9 +136,9 @@ Every single requirement in **Part C (`gid=523786758` — `Business & Functional
 ## 3. Quick Start Guide (Singapore Region: `asia-southeast1`)
 
 ### Step 1 — Run Track 1 Notebook 01: Serverless Seamless Data Ingestion (`01_Serverless_Seamless_Data_Ingestion.ipynb`)
+*(Optional Pre-Workshop VPC Setup: Run [`bash track1_platform_governance/scripts/setup_colab_vpc_network.sh`](./track1_platform_governance/scripts/setup_colab_vpc_network.sh) once in Cloud Shell if `acsm-colab-network` / `acsm-colab-subnet-sg` is not yet provisioned.)*
 Open **[`track1_platform_governance/notebook/01_Serverless_Seamless_Data_Ingestion.ipynb`](./track1_platform_governance/notebook/01_Serverless_Seamless_Data_Ingestion.ipynb)** in **BigQuery Studio (`asia-southeast1` Singapore)**:
-1. Run the **Step 0** Cloud Shell command once to create VPC `acsm-colab-network` and Singapore Subnet `acsm-colab-subnet-sg`.
-2. Run **Steps 1–8** (parameterized `PROJECT_ID` auto-detects your active project) to create `gs://acsm-workshop-landing-${PROJECT_ID}`, upload all 8 `.csv.gz` extracts (`Fact_EP_Judge`, `Fact_EP_Sales`, `Fact_EP_Collection`, `Fact_CC_Judge`, `Fact_CC_Sales`, `Fact_CC_Collection`, `m3CIF`, `dimProduct`), load `acsm_bronze` tables at **`$0` (`0 Bytes Billed`)**, and query the **Unified Multi-Engine Bronze Lakehouse** (BigQuery Native + GCP Lakehouse Iceberg + AWS Glue Federated Iceberg).
+1. Run **Steps 1–8** (parameterized `PROJECT_ID` auto-detects your active project) to create `gs://acsm-workshop-landing-${PROJECT_ID}`, upload all 8 `.csv.gz` extracts (`Fact_EP_Judge`, `Fact_EP_Sales`, `Fact_EP_Collection`, `Fact_CC_Judge`, `Fact_CC_Sales`, `Fact_CC_Collection`, `m3CIF`, `dimProduct`), load `acsm_bronze` tables at **`$0` (`0 Bytes Billed`)**, and query the **Unified Multi-Engine Bronze Lakehouse** (BigQuery Native + GCP Lakehouse Iceberg + AWS Glue Federated Iceberg).
 
 ### Step 2 — Run Track 1 Notebook 02: Agentic Medallion Transformation (`02_Data_Engineering_Agent_Medallion_Architecture.ipynb`)
 Open **[`track1_platform_governance/notebook/02_Data_Engineering_Agent_Medallion_Architecture.ipynb`](./track1_platform_governance/notebook/02_Data_Engineering_Agent_Medallion_Architecture.ipynb)** in **BigQuery Studio (`asia-southeast1` Singapore)**:
