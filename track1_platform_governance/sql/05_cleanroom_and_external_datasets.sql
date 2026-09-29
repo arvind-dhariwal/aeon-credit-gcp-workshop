@@ -193,7 +193,7 @@ WITH raw_hubs AS (
   SELECT * FROM UNNEST([
     STRUCT('HUB_KL_MIDVALLEY' AS hub_id, 'AEON Mall Mid Valley Megamall' AS aeon_hub_name, 'Kuala Lumpur' AS malaysian_state, 'Central' AS region, 101.6774 AS longitude, 3.1177 AS latitude),
     STRUCT('HUB_KL_MALURI', 'AEON Style Taman Maluri', 'Kuala Lumpur', 'Central', 101.7295, 3.1259),
-    STRUCT('HUB_KL_KEPONG', 'AEON BiG Kepong & Metro Prima', 'Kuala Lumpur', 'Central', 101.6366, 3.2135),
+    STRUCT('HUB_KL_KEPONG', 'AEON BiG Kepong', 'Kuala Lumpur', 'Central', 101.6366, 3.2135),
     STRUCT('HUB_KL_ALPHA_ANGLE', 'AEON Alpha Angle Wangsa Maju', 'Kuala Lumpur', 'Central', 101.7322, 3.2054),
     STRUCT('HUB_KL_AU2', 'AEON Mall AU2 Setiawangsa', 'Kuala Lumpur', 'Central', 101.7495, 3.1766),
     STRUCT('HUB_SEL_SHAH_ALAM', 'AEON Mall Shah Alam', 'Selangor', 'Central', 101.5432, 3.0769),
@@ -217,5 +217,54 @@ SELECT
   ST_ASTEXT(ST_GEOGPOINT(longitude, latitude)) AS branch_wkt,
   ST_ASGEOJSON(ST_GEOGPOINT(longitude, latitude)) AS branch_geojson
 FROM raw_hubs;
+
+CREATE OR REPLACE TABLE `acsm_subscribed_data.malaysia_external_pois_geog`
+CLUSTER BY poi_geog, primary_category
+OPTIONS (
+  description = 'Geospatial Feature Collection of Malaysian Retail, F&B, Supermarket, Pharmacy & EV/Fuel POIs with persisted WGS84 GEOGRAPHY points (ST_GEOGPOINT), WKT (ST_ASTEXT), and GeoJSON (ST_ASGEOJSON), clustered by poi_geog.'
+) AS
+WITH raw_pois AS (
+  SELECT * FROM UNNEST([
+    STRUCT('POI_MY_001' AS poi_id, 'Mid Valley Megamall Retail Concourse' AS poi_name, 'shopping_mall' AS primary_category, 'Kuala Lumpur' AS malaysian_state, 101.6778 AS longitude, 3.1182 AS latitude, 0.99 AS confidence_score),
+    STRUCT('POI_MY_002', 'The Gardens Mall Bangsar South', 'department_store', 'Kuala Lumpur', 101.6762, 3.1188, 0.98),
+    STRUCT('POI_MY_003', 'KL Eco City Retail Hub & Transit', 'supermarket', 'Kuala Lumpur', 101.6738, 3.1171, 0.96),
+    STRUCT('POI_MY_004', 'Bangsar Village Commercial Centre', 'supermarket', 'Kuala Lumpur', 101.6711, 3.1302, 0.97),
+    STRUCT('POI_MY_005', 'NU Sentral KL Sentral Transit Hub', 'shopping_mall', 'Kuala Lumpur', 101.6865, 3.1336, 0.98),
+    STRUCT('POI_MY_006', 'Sunway Velocity Mall Cheras', 'shopping_mall', 'Kuala Lumpur', 101.7245, 3.1278, 0.98),
+    STRUCT('POI_MY_007', 'MyTOWN Shopping Centre Cheras', 'department_store', 'Kuala Lumpur', 101.7231, 3.1348, 0.99),
+    STRUCT('POI_MY_008', 'TRX Exchange 106 Retail Quarter', 'shopping_mall', 'Kuala Lumpur', 101.7187, 3.1422, 0.99),
+    STRUCT('POI_MY_009', 'Kepong Village Mall & Commercial Park', 'supermarket', 'Kuala Lumpur', 101.6352, 3.2148, 0.95),
+    STRUCT('POI_MY_010', 'Desa ParkCity Waterfront Retail', 'restaurant', 'Kuala Lumpur', 101.6285, 3.1869, 0.97),
+    STRUCT('POI_MY_011', 'Wangsa Walk Mall & Metro Avenue', 'shopping_mall', 'Kuala Lumpur', 101.7412, 3.1992, 0.97),
+    STRUCT('POI_MY_012', 'Setapak Central Retail Hub', 'department_store', 'Kuala Lumpur', 101.7209, 3.2041, 0.96),
+    STRUCT('POI_MY_013', 'Setiawangsa Business Park & Dining', 'restaurant', 'Kuala Lumpur', 101.7481, 3.1782, 0.95),
+    STRUCT('POI_MY_014', 'Great Eastern Mall Jalan Ampang', 'supermarket', 'Kuala Lumpur', 101.7372, 3.1604, 0.96),
+    STRUCT('POI_MY_015', 'Section 13 Shah Alam Autocity & Retail', 'auto_dealership', 'Selangor', 101.5458, 3.0792, 0.96),
+    STRUCT('POI_MY_016', 'Glenmarie Commercial & EV Hub', 'electronics_store', 'Selangor', 101.5641, 3.0825, 0.95),
+    STRUCT('POI_MY_017', 'Bandar Botanic Klang Commercial Square', 'supermarket', 'Selangor', 101.4452, 2.9968, 0.97),
+    STRUCT('POI_MY_018', 'GM Klang Wholesale City', 'shopping_mall', 'Selangor', 101.4498, 2.9912, 0.98),
+    STRUCT('POI_MY_019', 'Balakong C180 Commercial Centre', 'restaurant', 'Selangor', 101.7602, 3.0355, 0.96),
+    STRUCT('POI_MY_020', 'Amerin Mall & Cheras Traders Square', 'supermarket', 'Selangor', 101.7634, 3.0319, 0.95),
+    STRUCT('POI_MY_021', 'Toppen Shopping Centre Tebrau', 'shopping_mall', 'Johor', 103.7942, 1.5521, 0.99),
+    STRUCT('POI_MY_022', 'Mount Austin Commercial & F&B Hub', 'restaurant', 'Johor', 103.7785, 1.5624, 0.97),
+    STRUCT('POI_MY_023', 'Bayan Lepas Queens Waterfront Retail', 'restaurant', 'Pulau Pinang', 100.3088, 5.3351, 0.98),
+    STRUCT('POI_MY_024', 'Bayan Baru Sunshine Square & Market', 'supermarket', 'Pulau Pinang', 100.2895, 5.3264, 0.96),
+    STRUCT('POI_MY_025', 'Medan Ipoh Bestari Retail Boulevard', 'restaurant', 'Perak', 101.1258, 4.6162, 0.97),
+    STRUCT('POI_MY_026', '3rd Mile Kuching Central Commercial', 'supermarket', 'Sarawak', 110.3375, 1.5312, 0.96)
+  ])
+)
+SELECT
+  poi_id,
+  poi_name,
+  primary_category,
+  malaysian_state,
+  longitude,
+  latitude,
+  confidence_score,
+  ST_GEOGPOINT(longitude, latitude) AS poi_geog,
+  ST_ASTEXT(ST_GEOGPOINT(longitude, latitude)) AS poi_wkt,
+  ST_ASGEOJSON(ST_GEOGPOINT(longitude, latitude)) AS poi_geojson
+FROM raw_pois;
+
 
 
