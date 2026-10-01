@@ -3,11 +3,17 @@
 
 import argparse
 import json
+import os
 import subprocess
 import time
 import google.auth
 from google.auth.transport.requests import AuthorizedSession
 from google.cloud import bigquery
+
+_sdk_bin = os.path.expanduser("~/google-cloud-sdk/bin")
+if os.path.isdir(_sdk_bin) and _sdk_bin not in os.environ.get("PATH", ""):
+    os.environ["PATH"] = f"{_sdk_bin}:{os.environ.get('PATH', '')}"
+
 
 
 def get_clients(project_id: str, location: str):
@@ -82,63 +88,158 @@ def cmd_data_lineage(args):
 
 
 # ==============================================================================
-# MODULE 2: Automated Statistical Data Profiling (RFP C1.1.1.4)
+# MODULE 2: Automated Statistical Data Profiling Across All Tables (RFP C1.1.1.4)
 # ==============================================================================
+from concurrent.futures import ThreadPoolExecutor, as_completed
+
+DEFAULT_WORKSHOP_DATASETS = "acsm_bronze,acsm_silver,acsm_gold,aeon_retail,acsm_subscribed_data"
+
+
+def _make_scan_id(prefix: str, ds_id: str, tbl_id: str) -> str:
+    """Builds a compliant Dataplex scan ID (max 62 chars, lowercase alphanumeric + hyphens)."""
+    if prefix == "dp" and ds_id == "acsm_gold" and tbl_id == "gold_aeon_customer360_profile":
+        return "acsm-gold-customer360-profile-scan"
+    raw = f"{prefix}-{ds_id.lower().replace('_', '-')}-{tbl_id.lower().replace('_', '-')}"
+    return raw[:62].rstrip("-")
+
+
+def _get_existing_scans(project_id: str, location: str) -> dict:
+    """Fetches all existing Dataplex scans once via gcloud and maps (scan_type, resource_uri) -> scan_id."""
+    res = subprocess.run(
+        [
+            "gcloud", "dataplex", "datascans", "list",
+            f"--project={project_id}", f"--location={location}",
+            "--quiet", "--format=json",
+        ],
+        capture_output=True,
+        text=True,
+    )
+    mapping = {}
+    if res.returncode == 0 and res.stdout.strip():
+        try:
+            for s in json.loads(res.stdout):
+                s_type = s.get("type", "")
+                res_uri = s.get("data", {}).get("resource", "")
+                s_id = s.get("name", "").split("/")[-1]
+                if s_type and res_uri and s_id:
+                    # Prefer deterministic or already-publishing scans
+                    if (s_type, res_uri) not in mapping or s_id.startswith(("acsm-", "dp-", "di-")):
+                        mapping[(s_type, res_uri)] = s_id
+        except Exception:
+            pass
+    return mapping
+
+
 def cmd_data_profile(args):
-    project_id, authed_session, bq_client = get_clients(args.project, args.location)
-    scan_id = "acsm-gold-customer360-profile-scan"
+    project_id, _, bq_client = get_clients(args.project, args.location)
+    target_datasets = [
+        d.strip() for d in getattr(args, "datasets", DEFAULT_WORKSHOP_DATASETS).split(",") if d.strip()
+    ]
     export_table_id = f"{project_id}.acsm_observability.dataplex_profile_scan_results"
     export_table_uri = f"//bigquery.googleapis.com/projects/{project_id}/datasets/acsm_observability/tables/dataplex_profile_scan_results"
 
     # 1. Ensure acsm_observability dataset & empty native export table exist BEFORE Dataplex exports
-    #    (Dataplex checkExportPrecondition requires the target table to exist beforehand;
-    #     prepareTableForExport automatically patches an empty table with the 28-column export schema.)
     bq_client.query(
         f"CREATE SCHEMA IF NOT EXISTS `{project_id}.acsm_observability` "
         f"OPTIONS (location = '{args.location}', description = 'ACSM Platform Observability, Data Profile, AutoDQ Results, Quarantine, DLP Findings & FinOps Layer')"
     ).result()
     bq_client.create_table(bigquery.Table(export_table_id), exists_ok=True)
 
-    # 2. Ensure Dataplex Data Profile scan has export_results_table configured and trigger a fresh run if needed
-    scan_url = f"https://dataplex.googleapis.com/v1/projects/{project_id}/locations/{args.location}/dataScans/{scan_id}"
-    scan_resp = authed_session.get(scan_url)
-    if scan_resp.status_code == 200:
-        dp_spec = scan_resp.json().get("dataProfileSpec", {})
-        dp_spec["catalogPublishingEnabled"] = True
-        dp_spec["postScanActions"] = {"bigqueryExport": {"resultsTable": export_table_uri}}
-        patch_r = authed_session.patch(
-            f"{scan_url}?updateMask=dataProfileSpec",
-            json={"dataProfileSpec": dp_spec},
+    print("==========================================================================", flush=True)
+    print(f"📈 [Module 2] Auto-Populating Dataplex Data Profile Scans via gcloud: {target_datasets}", flush=True)
+    print("==========================================================================", flush=True)
+
+    existing_scans = _get_existing_scans(project_id, args.location)
+    all_tables = []
+    for ds_id in target_datasets:
+        try:
+            rows = list(
+                bq_client.query(
+                    f"SELECT table_name FROM `{project_id}.{ds_id}.INFORMATION_SCHEMA.TABLES` "
+                    f"WHERE table_type = 'BASE TABLE' ORDER BY table_name"
+                ).result()
+            )
+            for r in rows:
+                all_tables.append((ds_id, r.table_name))
+        except Exception as exc:
+            print(f"  ⚠️ Skipping dataset `{ds_id}` ({exc})", flush=True)
+
+    def _profile_one_table(ds_id: str, t_name: str) -> str:
+        resource_uri = f"//bigquery.googleapis.com/projects/{project_id}/datasets/{ds_id}/tables/{t_name}"
+        dp_scan_id = existing_scans.get(("DATA_PROFILE", resource_uri)) or _make_scan_id("dp", ds_id, t_name)
+
+        if ("DATA_PROFILE", resource_uri) not in existing_scans:
+            subprocess.run(
+                [
+                    "gcloud", "dataplex", "datascans", "create", "data-profile", dp_scan_id,
+                    f"--project={project_id}",
+                    f"--location={args.location}",
+                    f"--display-name={ds_id}.{t_name} Data Profile",
+                    f"--data-source-resource={resource_uri}",
+                    f"--export-results-table={export_table_uri}",
+                    "--enable-catalog-publishing",
+                    "--on-demand=true",
+                    "--async",
+                    "--quiet",
+                ],
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+            time.sleep(2)
+        else:
+            subprocess.run(
+                [
+                    "gcloud", "dataplex", "datascans", "update", "data-profile", dp_scan_id,
+                    f"--project={project_id}",
+                    f"--location={args.location}",
+                    f"--export-results-table={export_table_uri}",
+                    "--enable-catalog-publishing",
+                    "--async",
+                    "--quiet",
+                ],
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+
+        subprocess.run(
+            [
+                "gcloud", "dataplex", "datascans", "run", dp_scan_id,
+                f"--project={project_id}", f"--location={args.location}", "--quiet", "--format=json",
+            ],
+            check=False,
+            capture_output=True,
+            text=True,
         )
-        op_name = patch_r.json().get("name") if patch_r.status_code == 200 else None
-        if op_name and "/operations/" in op_name:
-            for _ in range(10):
-                op_r = authed_session.get(f"https://dataplex.googleapis.com/v1/{op_name}")
-                if op_r.status_code == 200 and op_r.json().get("done"):
-                    break
-                time.sleep(1)
 
-        # Check if a job is currently running; if not (or if previous export failed before table existed), trigger a run
-        jobs_r = authed_session.get(f"{scan_url}/jobs?pageSize=3")
-        jobs_list = jobs_r.json().get("dataScanJobs", []) if jobs_r.status_code == 200 else []
-        has_running_job = any(j.get("state") in ("RUNNING", "PENDING", "CREATING") for j in jobs_list)
-        if not has_running_job:
-            authed_session.post(f"{scan_url}:run", json={})
+        subprocess.run(
+            [
+                "bq", "update",
+                "--set_label", f"dataplex-dp-published-project:{project_id}",
+                "--set_label", f"dataplex-dp-published-location:{args.location}",
+                "--set_label", f"dataplex-dp-published-scan:{dp_scan_id}",
+                f"{project_id}:{ds_id}.{t_name}",
+            ],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        return f"  ✅ Profile Scan & BQ Labels Published: `{ds_id}.{t_name}` (`{dp_scan_id}`)"
 
-    subprocess.run(
-        [
-            "bq", "update",
-            "--set_label", f"dataplex-dp-published-project:{project_id}",
-            "--set_label", f"dataplex-dp-published-location:{args.location}",
-            "--set_label", f"dataplex-dp-published-scan:{scan_id}",
-            f"{project_id}:acsm_gold.gold_aeon_customer360_profile",
-        ],
-        check=False,
-        capture_output=True,
-        text=True,
-    )
+    profiled_tables = []
+    with ThreadPoolExecutor(max_workers=6) as pool:
+        futures = {pool.submit(_profile_one_table, ds, tbl): (ds, tbl) for ds, tbl in all_tables}
+        for fut in as_completed(futures):
+            msg = fut.result()
+            profiled_tables.append(msg)
+            print(msg, flush=True)
 
     # Dynamically detect DSR and Score column names on gold_aeon_customer360_profile
+    scan_id = existing_scans.get(
+        ("DATA_PROFILE", f"//bigquery.googleapis.com/projects/{project_id}/datasets/acsm_gold/tables/gold_aeon_customer360_profile"),
+        "acsm-gold-customer360-profile-scan",
+    )
     tbl_obj = bq_client.get_table(f"{project_id}.acsm_gold.gold_aeon_customer360_profile")
     tbl_cols = {f.name: f.field_type for f in tbl_obj.schema}
     dsr_col = next((c for c in ["avg_ep_dsr", "avg_ep_new_dsr", "avg_cc_dsr"] if c in tbl_cols), None)
@@ -173,25 +274,19 @@ def cmd_data_profile(args):
     row = list(
         bq_client.query(f"SELECT * FROM `{project_id}.acsm_observability.dataplex_profile_summary`").result()
     )[0]
-    print("==========================================================================")
-    print(f"📈 [Module 2 Outcome] Dataplex Data Profile (`{scan_id}`)")
-    print("==========================================================================")
-    print(f"  • Target Table             : `{row.target_table}`")
-    print(f"  • Native BQ Export Table   : `{export_table_id}` (Pre-created for Dataplex postScanActions export)")
-    print(f"  • Executive Summary Table  : `{project_id}.acsm_observability.dataplex_profile_summary`")
-    print(f"  • Total Profiled Customers : {row.total_customers:,}")
-    print(f"  • CIF_ID Null / Unique %   : {row.cif_id_null_pct}% Null | {row.cif_id_uniqueness_pct}% Unique")
-    print(f"  • Annual Income (MYR)      : Min RM {row.min_annual_income_myr:,.2f} | Avg RM {row.avg_annual_income_myr:,.2f} | Max RM {row.max_annual_income_myr:,.2f}")
-    print(f"  • Avg CTOS Bureau Score    : {row.avg_ctos_score}")
-    print(f"  • Avg Easy Payment DSR %   : {row.avg_ep_dsr_pct}%")
-    print(f"  • Malaysian States Covered : {row.distinct_malaysian_states} States")
-    print("  👉 UI Verification: BigQuery Studio -> `gold_aeon_customer360_profile` -> `Data Profile` tab")
-    print("==========================================================================")
-
+    print("--------------------------------------------------------------------------", flush=True)
+    print(f"  • Total Tables Profiled    : {len(profiled_tables)} tables across {len(target_datasets)} datasets", flush=True)
+    print(f"  • Native BQ Export Table   : `{export_table_id}`", flush=True)
+    print(f"  • Executive Summary Table  : `{project_id}.acsm_observability.dataplex_profile_summary`", flush=True)
+    print(f"  • Total Profiled Customers : {row.total_customers:,}", flush=True)
+    print(f"  • CIF_ID Null / Unique %   : {row.cif_id_null_pct}% Null | {row.cif_id_uniqueness_pct}% Unique", flush=True)
+    print(f"  • Annual Income (MYR)      : Min RM {row.min_annual_income_myr:,.2f} | Avg RM {row.avg_annual_income_myr:,.2f} | Max RM {row.max_annual_income_myr:,.2f}", flush=True)
+    print("  👉 UI Verification: BigQuery Studio -> Select ANY table -> `Data Profile` tab", flush=True)
+    print("==========================================================================", flush=True)
 
 
 # ==============================================================================
-# MODULE 3: AI Data Insights & Knowledge Graph (RFP C1.1.1.10)
+# MODULE 3: AI Data Insights & Knowledge Graph Across All Tables (RFP C1.1.1.10)
 # ==============================================================================
 def generate_schema_grounded_insights_via_gemini(project_id: str, dataset_id: str, tables_meta: dict) -> dict:
     from google import genai
@@ -241,19 +336,30 @@ def cmd_data_insights(args):
     project_id, authed_session, bq_client = get_clients(args.project, args.location)
     target_datasets = [d.strip() for d in args.datasets.split(",") if d.strip()]
 
-    print("==========================================================================")
-    print(f"🧠 [Module 3 Outcome] AI Data Insights & Knowledge Graph: {target_datasets}")
-    print("==========================================================================")
+    print("==========================================================================", flush=True)
+    print(f"🧠 [Module 3 Outcome] AI Data Insights & Knowledge Graph Across All Tables: {target_datasets}", flush=True)
+    print("==========================================================================", flush=True)
+
+    existing_scans = _get_existing_scans(project_id, args.location)
 
     for ds_id in target_datasets:
-        scan_id = f"{ds_id.lower().replace('_', '-')}-dataset-insight-scan"
-        resource_uri = f"//bigquery.googleapis.com/projects/{project_id}/datasets/{ds_id}"
+        try:
+            rows = list(
+                bq_client.query(
+                    f"SELECT table_name FROM `{project_id}.{ds_id}.INFORMATION_SCHEMA.TABLES` "
+                    f"WHERE table_type = 'BASE TABLE' ORDER BY table_name"
+                ).result()
+            )
+        except Exception as exc:
+            print(f"  ⚠️ Skipping dataset `{ds_id}` ({exc})", flush=True)
+            continue
+        ds_tables = [r.table_name for r in rows]
 
-        desc_cmd = [
-            "gcloud", "dataplex", "datascans", "describe", scan_id,
-            f"--project={project_id}", f"--location={args.location}", "--format=json",
-        ]
-        if subprocess.run(desc_cmd, capture_output=True, text=True).returncode != 0:
+        # 1. Dataset-Level Data Documentation Scan via gcloud
+        resource_uri = f"//bigquery.googleapis.com/projects/{project_id}/datasets/{ds_id}"
+        scan_id = existing_scans.get(("DATA_DOCUMENTATION", resource_uri)) or f"{ds_id.lower().replace('_', '-')}-dataset-insight-scan"
+
+        if ("DATA_DOCUMENTATION", resource_uri) not in existing_scans:
             subprocess.run(
                 [
                     "gcloud", "dataplex", "datascans", "create", "data-documentation", scan_id,
@@ -264,19 +370,22 @@ def cmd_data_insights(args):
                     f"--data-source-resource={resource_uri}",
                     "--enable-catalog-publishing",
                     "--on-demand=true",
+                    "--async",
+                    "--quiet",
                 ],
                 check=False,
                 capture_output=True,
                 text=True,
             )
-            print(f"  ✅ Created Dataset Insight Scan : `{scan_id}`")
+            time.sleep(2)
+            print(f"  ✅ Created Dataset Insight Scan : `{scan_id}`", flush=True)
         else:
-            print(f"  ℹ️ Verified Dataset Insight Scan: `{scan_id}`")
+            print(f"  ℹ️ Verified Dataset Insight Scan: `{scan_id}`", flush=True)
 
         subprocess.run(
             [
                 "gcloud", "dataplex", "datascans", "run", scan_id,
-                f"--project={project_id}", f"--location={args.location}", "--format=json",
+                f"--project={project_id}", f"--location={args.location}", "--quiet", "--format=json",
             ],
             check=False,
             capture_output=True,
@@ -295,99 +404,208 @@ def cmd_data_insights(args):
             text=True,
         )
 
+        # 2. Table-Level Data Documentation (Insights) Scan via gcloud for EVERY base table in parallel
+        dataplex_table_overviews = {}
+        dataplex_col_descriptions = {t: {} for t in ds_tables}
+
+        def _insight_one_table(t_name: str):
+            t_resource_uri = f"//bigquery.googleapis.com/projects/{project_id}/datasets/{ds_id}/tables/{t_name}"
+            t_scan_id = existing_scans.get(("DATA_DOCUMENTATION", t_resource_uri)) or _make_scan_id("di", ds_id, t_name)
+
+            if ("DATA_DOCUMENTATION", t_resource_uri) not in existing_scans:
+                subprocess.run(
+                    [
+                        "gcloud", "dataplex", "datascans", "create", "data-documentation", t_scan_id,
+                        f"--project={project_id}",
+                        f"--location={args.location}",
+                        f"--display-name={ds_id}.{t_name} Table Insights",
+                        f"--description=Automated Table & Column Data Insights scan for {ds_id}.{t_name}",
+                        f"--data-source-resource={t_resource_uri}",
+                        "--enable-catalog-publishing",
+                        "--on-demand=true",
+                        "--async",
+                        "--quiet",
+                    ],
+                    check=False,
+                    capture_output=True,
+                    text=True,
+                )
+                time.sleep(2)
+            else:
+                subprocess.run(
+                    [
+                        "gcloud", "dataplex", "datascans", "update", "data-documentation", t_scan_id,
+                        f"--project={project_id}",
+                        f"--location={args.location}",
+                        "--enable-catalog-publishing",
+                        "--async",
+                        "--quiet",
+                    ],
+                    check=False,
+                    capture_output=True,
+                    text=True,
+                )
+
+            subprocess.run(
+                [
+                    "gcloud", "dataplex", "datascans", "run", t_scan_id,
+                    f"--project={project_id}", f"--location={args.location}", "--quiet", "--format=json",
+                ],
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+
+            subprocess.run(
+                [
+                    "bq", "update",
+                    "--set_label", f"dataplex-data-documentation-published-project:{project_id}",
+                    "--set_label", f"dataplex-data-documentation-published-location:{args.location}",
+                    "--set_label", f"dataplex-data-documentation-published-scan:{t_scan_id}",
+                    f"{project_id}:{ds_id}.{t_name}",
+                ],
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+
+            t_scan_full = authed_session.get(
+                f"https://dataplex.googleapis.com/v1/projects/{project_id}/locations/{args.location}/dataScans/{t_scan_id}?view=FULL"
+            ).json()
+            t_doc_res = t_scan_full.get("dataDocumentationResult", {})
+            t_res = t_doc_res.get("tableResult") or t_doc_res
+            t_ov = t_res.get("overview", "")
+            t_cols = {
+                fld["name"]: fld["description"]
+                for fld in t_res.get("schema", {}).get("fields", [])
+                if fld.get("name") and fld.get("description")
+            }
+            return t_name, t_scan_id, t_ov, t_cols
+
+        with ThreadPoolExecutor(max_workers=6) as pool:
+            futures = {pool.submit(_insight_one_table, t): t for t in ds_tables}
+            for fut in as_completed(futures):
+                t_name, t_scan_id, t_ov, t_cols = fut.result()
+                if t_ov:
+                    dataplex_table_overviews[t_name] = t_ov
+                dataplex_col_descriptions[t_name].update(t_cols)
+                print(f"  ✅ Table Insight Scan & BQ Labels Published: `{ds_id}.{t_name}` (`{t_scan_id}`)", flush=True)
+
         scan_full = authed_session.get(
             f"https://dataplex.googleapis.com/v1/projects/{project_id}/locations/{args.location}/dataScans/{scan_id}?view=FULL"
         ).json()
         ds_result = scan_full.get("dataDocumentationResult", {}).get("datasetResult", {})
 
-        rows = list(
-            bq_client.query(
-                f"SELECT table_name FROM `{project_id}.{ds_id}.INFORMATION_SCHEMA.TABLES` "
-                f"WHERE table_type = 'BASE TABLE' ORDER BY table_name"
-            ).result()
-        )
-        ds_tables = [r.table_name for r in rows]
-
-        tables_schema_input = {}
-        for t_name in ds_tables:
-            tbl_obj = bq_client.get_table(f"{project_id}.{ds_id}.{t_name}")
-            tables_schema_input[t_name] = [{"name": f.name, "type": f.field_type} for f in tbl_obj.schema]
-
-        dataplex_table_overviews = {}
-        dataplex_col_descriptions = {t: {} for t in ds_tables}
         for tr in ds_result.get("tableResults", []):
             t_short = tr.get("name", "").split("/tables/")[-1]
             if t_short in dataplex_col_descriptions:
-                if tr.get("overview"):
+                if tr.get("overview") and t_short not in dataplex_table_overviews:
                     dataplex_table_overviews[t_short] = tr["overview"]
                 for fld in tr.get("schema", {}).get("fields", []):
-                    if fld.get("name") and fld.get("description"):
+                    if fld.get("name") and fld.get("description") and fld["name"] not in dataplex_col_descriptions[t_short]:
                         dataplex_col_descriptions[t_short][fld["name"]] = fld["description"]
 
-        needs_agent_completion = (
-            not ds_result.get("overview")
-            or any(t not in dataplex_table_overviews for t in ds_tables)
-            or any(len(dataplex_col_descriptions[t]) < len(tables_schema_input[t]) for t in ds_tables)
-        )
-        gemini_insights = {}
-        if needs_agent_completion:
-            gemini_insights = generate_schema_grounded_insights_via_gemini(
-                project_id, ds_id, tables_schema_input
-            )
-
-        dataset_overview = ds_result.get("overview") or gemini_insights.get("dataset_overview", "")
-        if dataset_overview:
-            ds_obj = bq_client.get_dataset(f"{project_id}.{ds_id}")
-            ds_obj.description = dataset_overview
-            bq_client.update_dataset(ds_obj, ["description"])
-            print(f"\n📌 [1] Dataset-Level AI Description (`{ds_id}`):\n   {dataset_overview}")
-
-        schema_rels = ds_result.get("schemaRelationships", [])
-        print(f"\n🕸️ [2] Dataset-Level Knowledge Graph (`{ds_id}` Schema Join Relationships):")
-        if schema_rels:
-            for rel in schema_rels:
-                left_fqn = rel.get("leftSchemaPaths", {}).get("tableFqn", "").split("/tables/")[-1]
-                left_cols = ", ".join(rel.get("leftSchemaPaths", {}).get("paths", []))
-                right_fqn = rel.get("rightSchemaPaths", {}).get("tableFqn", "").split("/tables/")[-1]
-                right_cols = ", ".join(rel.get("rightSchemaPaths", {}).get("paths", []))
-                print(f"   • {ds_id}.{left_fqn} ({left_cols}) <==> {ds_id}.{right_fqn} ({right_cols}) [SCHEMA_JOIN]")
-        else:
-            for rel in gemini_insights.get("knowledge_graph_relationships", []):
-                print(
-                    f"   • {ds_id}.{rel.get('left_table')} ({rel.get('left_column')}) <==> "
-                    f"{ds_id}.{rel.get('right_table')} ({rel.get('right_column')}) "
-                    f"[SCHEMA_JOIN] — {rel.get('rationale', '')}"
-                )
-
-        print(f"\n📊 [3] Table & Column-Level AI Descriptions Synced (`{ds_id}`):")
+        # Check which tables actually have empty table descriptions or empty column descriptions
+        tables_missing_descs = {}
+        table_objs = {}
         for t_name in ds_tables:
             tbl_obj = bq_client.get_table(f"{project_id}.{ds_id}.{t_name}")
+            table_objs[t_name] = tbl_obj
+            has_table_desc = bool((tbl_obj.description and tbl_obj.description.strip()) or dataplex_table_overviews.get(t_name))
+            missing_cols = [
+                f for f in tbl_obj.schema
+                if not (f.description and f.description.strip()) and f.name not in dataplex_col_descriptions[t_name]
+            ]
+            if not has_table_desc or missing_cols:
+                tables_missing_descs[t_name] = [{"name": f.name, "type": f.field_type} for f in tbl_obj.schema]
+
+        ds_obj = bq_client.get_dataset(f"{project_id}.{ds_id}")
+        gemini_insights = {}
+        if tables_missing_descs or (not ds_result.get("overview") and not ds_obj.description):
+            schema_for_gemini = tables_missing_descs or {
+                t: [{"name": f.name, "type": f.field_type} for f in table_objs[t].schema] for t in ds_tables[:3]
+            }
+            gemini_insights = generate_schema_grounded_insights_via_gemini(
+                project_id, ds_id, schema_for_gemini
+            )
+
+        dataset_overview = ds_result.get("overview") or ds_obj.description or gemini_insights.get("dataset_overview", "")
+        if dataset_overview and dataset_overview != ds_obj.description:
+            ds_obj.description = dataset_overview
+            bq_client.update_dataset(ds_obj, ["description"])
+        if dataset_overview:
+            print(f"\n📌 [1] Dataset-Level AI Description (`{ds_id}`):\n   {dataset_overview}", flush=True)
+
+        schema_rels = ds_result.get("schemaRelationships", [])
+        if schema_rels or gemini_insights.get("knowledge_graph_relationships"):
+            print(f"\n🕸️ [2] Dataset-Level Knowledge Graph (`{ds_id}` Schema Join Relationships):", flush=True)
+            if schema_rels:
+                for rel in schema_rels:
+                    left_fqn = rel.get("leftSchemaPaths", {}).get("tableFqn", "").split("/tables/")[-1]
+                    left_cols = ", ".join(rel.get("leftSchemaPaths", {}).get("paths", []))
+                    right_fqn = rel.get("rightSchemaPaths", {}).get("tableFqn", "").split("/tables/")[-1]
+                    right_cols = ", ".join(rel.get("rightSchemaPaths", {}).get("paths", []))
+                    print(f"   • {ds_id}.{left_fqn} ({left_cols}) <==> {ds_id}.{right_fqn} ({right_cols}) [SCHEMA_JOIN]", flush=True)
+            else:
+                for rel in gemini_insights.get("knowledge_graph_relationships", []):
+                    print(
+                        f"   • {ds_id}.{rel.get('left_table')} ({rel.get('left_column')}) <==> "
+                        f"{ds_id}.{rel.get('right_table')} ({rel.get('right_column')}) "
+                        f"[SCHEMA_JOIN] — {rel.get('rationale', '')}",
+                        flush=True,
+                    )
+
+        print(f"\n📊 [3] Table & Column-Level AI Descriptions Synced (`{ds_id}`):", flush=True)
+        for t_name in ds_tables:
+            tbl_obj = table_objs[t_name]
             gem_tbl = gemini_insights.get("tables", {}).get(t_name, {})
-            t_overview = dataplex_table_overviews.get(t_name) or gem_tbl.get("table_overview", "")
-            if t_overview:
+            t_overview = (
+                (tbl_obj.description and tbl_obj.description.strip())
+                or dataplex_table_overviews.get(t_name)
+                or gem_tbl.get("table_overview", "")
+            )
+            needs_bq_update = False
+            if t_overview and t_overview != tbl_obj.description:
                 tbl_obj.description = t_overview
+                needs_bq_update = True
 
             gem_cols = gem_tbl.get("columns", {})
             updated_schema = []
             described_count = 0
             for field in tbl_obj.schema:
+                existing_col_desc = (field.description or "").strip()
                 col_desc = (
-                    dataplex_col_descriptions.get(t_name, {}).get(field.name)
+                    existing_col_desc
+                    or dataplex_col_descriptions.get(t_name, {}).get(field.name)
                     or gem_cols.get(field.name)
-                    or field.description
                 )
                 f_repr = field.to_api_repr()
                 if col_desc:
+                    if col_desc != existing_col_desc:
+                        needs_bq_update = True
                     f_repr["description"] = col_desc
                     described_count += 1
+                for sub_f in f_repr.get("fields", []):
+                    if not (sub_f.get("description") or "").strip():
+                        sub_name = sub_f.get("name", "")
+                        sub_f["description"] = (
+                            dataplex_col_descriptions.get(t_name, {}).get(f"{field.name}.{sub_name}")
+                            or gem_cols.get(f"{field.name}.{sub_name}")
+                            or f"Nested {sub_name} ({sub_f.get('type', 'VALUE')}) subfield of {field.name}."
+                        )
+                        needs_bq_update = True
                 updated_schema.append(bigquery.SchemaField.from_api_repr(f_repr))
 
-            tbl_obj.schema = updated_schema
-            bq_client.update_table(tbl_obj, ["description", "schema"])
+            if needs_bq_update:
+                tbl_obj.schema = updated_schema
+                bq_client.update_table(tbl_obj, ["description", "schema"])
             print(
-                f"   ✅ `{ds_id}.{t_name}`: Table description + {described_count}/{len(updated_schema)} columns auto-described (100.0%)"
+                f"   ✅ `{ds_id}.{t_name}`: Table description + {described_count}/{len(updated_schema)} columns auto-described (100.0%)",
+                flush=True,
             )
-    print("\n  👉 UI Verification: BigQuery Studio -> Dataset `acsm_silver` / `acsm_gold` -> `Insights` & `Schema` tabs")
+    print("\n  👉 UI Verification: BigQuery Studio -> Select ANY table -> `Insights` & `Schema` tabs", flush=True)
+
+
 
 
 # ==============================================================================
@@ -1319,8 +1537,8 @@ def main():
         sp = subparsers.add_parser(cmd_name)
         sp.add_argument("--project", required=True, help="GCP Project ID")
         sp.add_argument("--location", default="asia-southeast1", help="GCP Region")
-        if cmd_name == "data-insights":
-            sp.add_argument("--datasets", default="acsm_silver,acsm_gold", help="Comma-separated dataset IDs")
+        if cmd_name in ("data-profile", "data-insights"):
+            sp.add_argument("--datasets", default=DEFAULT_WORKSHOP_DATASETS, help="Comma-separated dataset IDs")
         if cmd_name in ("setup-cls-masking", "ai-catalog-governance"):
             sp.add_argument("--user-email", required=True, help="Active workshop user email")
 
