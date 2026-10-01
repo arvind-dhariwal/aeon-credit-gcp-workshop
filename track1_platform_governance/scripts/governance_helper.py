@@ -103,8 +103,8 @@ def _make_scan_id(prefix: str, ds_id: str, tbl_id: str) -> str:
     return raw[:62].rstrip("-")
 
 
-def _get_existing_scans(project_id: str, location: str) -> dict:
-    """Fetches all existing Dataplex scans once via gcloud and maps (scan_type, resource_uri) -> scan_id."""
+def _get_existing_scans(project_id: str, location: str, authed_session=None) -> dict:
+    """Fetches all existing Dataplex scans once via gcloud (with REST fallback) and maps (scan_type, resource_uri) -> scan_id."""
     res = subprocess.run(
         [
             "gcloud", "dataplex", "datascans", "list",
@@ -114,24 +114,119 @@ def _get_existing_scans(project_id: str, location: str) -> dict:
         capture_output=True,
         text=True,
     )
-    mapping = {}
+    scans_list = []
     if res.returncode == 0 and res.stdout.strip():
         try:
-            for s in json.loads(res.stdout):
-                s_type = s.get("type", "")
-                res_uri = s.get("data", {}).get("resource", "")
-                s_id = s.get("name", "").split("/")[-1]
-                if s_type and res_uri and s_id:
-                    # Prefer deterministic or already-publishing scans
-                    if (s_type, res_uri) not in mapping or s_id.startswith(("acsm-", "dp-", "di-")):
-                        mapping[(s_type, res_uri)] = s_id
+            scans_list = json.loads(res.stdout)
         except Exception:
             pass
+    if not scans_list and authed_session is not None:
+        try:
+            r = authed_session.get(
+                f"https://dataplex.googleapis.com/v1/projects/{project_id}/locations/{location}/dataScans?pageSize=200"
+            )
+            if r.status_code == 200:
+                scans_list = r.json().get("dataScans", [])
+        except Exception:
+            pass
+
+    mapping = {}
+    for s in scans_list:
+        s_type = s.get("type", "")
+        res_uri = s.get("data", {}).get("resource", "")
+        s_id = s.get("name", "").split("/")[-1]
+        if s_type and res_uri and s_id:
+            if (s_type, res_uri) not in mapping or s_id.startswith(("acsm-", "dp-", "di-")):
+                mapping[(s_type, res_uri)] = s_id
     return mapping
 
 
+def _run_gcloud_retry(cmd: list, retries: int = 3) -> subprocess.CompletedProcess:
+    """Runs a gcloud/bq CLI command with retries for transient SQLite lock or rate-limit errors."""
+    last_res = None
+    for attempt in range(retries):
+        last_res = subprocess.run(cmd, check=False, capture_output=True, text=True)
+        if last_res.returncode == 0 or "ALREADY_EXISTS" in (last_res.stderr or ""):
+            return last_res
+        time.sleep(2 * (attempt + 1))
+    return last_res
+
+
+def _set_bq_table_labels(bq_client, project_id: str, ds_id: str, t_name: str, new_labels: dict):
+    """Applies BigQuery table labels via bq CLI with Python SDK fallback."""
+    cmd = ["bq", "update"]
+    for k, v in new_labels.items():
+        cmd.extend(["--set_label", f"{k}:{v}"])
+    cmd.append(f"{project_id}:{ds_id}.{t_name}")
+    res = _run_gcloud_retry(cmd)
+    if res.returncode != 0:
+        try:
+            tbl = bq_client.get_table(f"{project_id}.{ds_id}.{t_name}")
+            labels = dict(tbl.labels or {})
+            labels.update(new_labels)
+            tbl.labels = labels
+            bq_client.update_table(tbl, ["labels"])
+        except Exception:
+            pass
+
+
+def _ensure_scan_job_triggered(
+    authed_session,
+    project_id: str,
+    location: str,
+    scan_id: str,
+    scan_type: str = None,
+    resource_uri: str = None,
+    export_table_uri: str = None,
+):
+    """Guarantees the Dataplex scan exists, is ACTIVE with catalog publishing enabled, and has a triggered job."""
+    base_scans_url = f"https://dataplex.googleapis.com/v1/projects/{project_id}/locations/{location}/dataScans"
+    scan_url = f"{base_scans_url}/{scan_id}"
+
+    r = authed_session.get(scan_url)
+    if r.status_code == 404 and scan_type and resource_uri:
+        body = {
+            "data": {"resource": resource_uri},
+            "executionSpec": {"trigger": {"onDemand": {}}},
+        }
+        if scan_type == "DATA_PROFILE":
+            body["dataProfileSpec"] = {"catalogPublishingEnabled": True}
+            if export_table_uri:
+                body["dataProfileSpec"]["postScanActions"] = {
+                    "bigqueryExport": {"resultsTable": export_table_uri}
+                }
+        elif scan_type == "DATA_DOCUMENTATION":
+            body["dataDocumentationSpec"] = {"catalogPublishingEnabled": True}
+        authed_session.post(f"{base_scans_url}?dataScanId={scan_id}", json=body)
+
+    for _ in range(20):
+        r = authed_session.get(scan_url)
+        if r.status_code == 200 and r.json().get("state") == "ACTIVE":
+            break
+        time.sleep(2)
+
+    jobs_url = f"{scan_url}/jobs?pageSize=3"
+    jr = authed_session.get(jobs_url)
+    if jr.status_code == 200:
+        jobs = jr.json().get("dataScanJobs", [])
+        if any(j.get("state") in ("RUNNING", "PENDING", "SUCCEEDED") for j in jobs):
+            return
+
+    run_res = subprocess.run(
+        [
+            "gcloud", "dataplex", "datascans", "run", scan_id,
+            f"--project={project_id}", f"--location={location}", "--quiet", "--format=json",
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    if run_res.returncode != 0:
+        authed_session.post(f"{scan_url}:run", json={})
+
+
 def cmd_data_profile(args):
-    project_id, _, bq_client = get_clients(args.project, args.location)
+    project_id, authed_session, bq_client = get_clients(args.project, args.location)
     target_datasets = [
         d.strip() for d in getattr(args, "datasets", DEFAULT_WORKSHOP_DATASETS).split(",") if d.strip()
     ]
@@ -149,7 +244,7 @@ def cmd_data_profile(args):
     print(f"📈 [Module 2] Auto-Populating Dataplex Data Profile Scans via gcloud: {target_datasets}", flush=True)
     print("==========================================================================", flush=True)
 
-    existing_scans = _get_existing_scans(project_id, args.location)
+    existing_scans = _get_existing_scans(project_id, args.location, authed_session)
     all_tables = []
     for ds_id in target_datasets:
         try:
@@ -169,7 +264,7 @@ def cmd_data_profile(args):
         dp_scan_id = existing_scans.get(("DATA_PROFILE", resource_uri)) or _make_scan_id("dp", ds_id, t_name)
 
         if ("DATA_PROFILE", resource_uri) not in existing_scans:
-            subprocess.run(
+            _run_gcloud_retry(
                 [
                     "gcloud", "dataplex", "datascans", "create", "data-profile", dp_scan_id,
                     f"--project={project_id}",
@@ -179,16 +274,11 @@ def cmd_data_profile(args):
                     f"--export-results-table={export_table_uri}",
                     "--enable-catalog-publishing",
                     "--on-demand=true",
-                    "--async",
                     "--quiet",
-                ],
-                check=False,
-                capture_output=True,
-                text=True,
+                ]
             )
-            time.sleep(2)
         else:
-            subprocess.run(
+            _run_gcloud_retry(
                 [
                     "gcloud", "dataplex", "datascans", "update", "data-profile", dp_scan_id,
                     f"--project={project_id}",
@@ -197,38 +287,29 @@ def cmd_data_profile(args):
                     "--enable-catalog-publishing",
                     "--async",
                     "--quiet",
-                ],
-                check=False,
-                capture_output=True,
-                text=True,
+                ]
             )
 
-        subprocess.run(
-            [
-                "gcloud", "dataplex", "datascans", "run", dp_scan_id,
-                f"--project={project_id}", f"--location={args.location}", "--quiet", "--format=json",
-            ],
-            check=False,
-            capture_output=True,
-            text=True,
+        _ensure_scan_job_triggered(
+            authed_session, project_id, args.location, dp_scan_id,
+            scan_type="DATA_PROFILE", resource_uri=resource_uri, export_table_uri=export_table_uri,
         )
 
-        subprocess.run(
-            [
-                "bq", "update",
-                "--set_label", f"dataplex-dp-published-project:{project_id}",
-                "--set_label", f"dataplex-dp-published-location:{args.location}",
-                "--set_label", f"dataplex-dp-published-scan:{dp_scan_id}",
-                f"{project_id}:{ds_id}.{t_name}",
-            ],
-            check=False,
-            capture_output=True,
-            text=True,
+        _set_bq_table_labels(
+            bq_client,
+            project_id,
+            ds_id,
+            t_name,
+            {
+                "dataplex-dp-published-project": project_id,
+                "dataplex-dp-published-location": args.location,
+                "dataplex-dp-published-scan": dp_scan_id,
+            },
         )
         return f"  ✅ Profile Scan & BQ Labels Published: `{ds_id}.{t_name}` (`{dp_scan_id}`)"
 
     profiled_tables = []
-    with ThreadPoolExecutor(max_workers=6) as pool:
+    with ThreadPoolExecutor(max_workers=3) as pool:
         futures = {pool.submit(_profile_one_table, ds, tbl): (ds, tbl) for ds, tbl in all_tables}
         for fut in as_completed(futures):
             msg = fut.result()
@@ -340,7 +421,7 @@ def cmd_data_insights(args):
     print(f"🧠 [Module 3 Outcome] AI Data Insights & Knowledge Graph Across All Tables: {target_datasets}", flush=True)
     print("==========================================================================", flush=True)
 
-    existing_scans = _get_existing_scans(project_id, args.location)
+    existing_scans = _get_existing_scans(project_id, args.location, authed_session)
 
     for ds_id in target_datasets:
         try:
@@ -360,7 +441,7 @@ def cmd_data_insights(args):
         scan_id = existing_scans.get(("DATA_DOCUMENTATION", resource_uri)) or f"{ds_id.lower().replace('_', '-')}-dataset-insight-scan"
 
         if ("DATA_DOCUMENTATION", resource_uri) not in existing_scans:
-            subprocess.run(
+            _run_gcloud_retry(
                 [
                     "gcloud", "dataplex", "datascans", "create", "data-documentation", scan_id,
                     f"--project={project_id}",
@@ -370,39 +451,37 @@ def cmd_data_insights(args):
                     f"--data-source-resource={resource_uri}",
                     "--enable-catalog-publishing",
                     "--on-demand=true",
-                    "--async",
                     "--quiet",
-                ],
-                check=False,
-                capture_output=True,
-                text=True,
+                ]
             )
-            time.sleep(2)
             print(f"  ✅ Created Dataset Insight Scan : `{scan_id}`", flush=True)
         else:
             print(f"  ℹ️ Verified Dataset Insight Scan: `{scan_id}`", flush=True)
 
-        subprocess.run(
-            [
-                "gcloud", "dataplex", "datascans", "run", scan_id,
-                f"--project={project_id}", f"--location={args.location}", "--quiet", "--format=json",
-            ],
-            check=False,
-            capture_output=True,
-            text=True,
+        _ensure_scan_job_triggered(
+            authed_session, project_id, args.location, scan_id,
+            scan_type="DATA_DOCUMENTATION", resource_uri=resource_uri,
         )
-        subprocess.run(
+        ds_lbl_res = _run_gcloud_retry(
             [
                 "bq", "update",
                 "--set_label", f"dataplex-data-documentation-published-project:{project_id}",
                 "--set_label", f"dataplex-data-documentation-published-location:{args.location}",
                 "--set_label", f"dataplex-data-documentation-published-scan:{scan_id}",
                 f"{project_id}:{ds_id}",
-            ],
-            check=False,
-            capture_output=True,
-            text=True,
+            ]
         )
+        if ds_lbl_res.returncode != 0:
+            try:
+                ds_obj_lbl = bq_client.get_dataset(f"{project_id}.{ds_id}")
+                labels = dict(ds_obj_lbl.labels or {})
+                labels["dataplex-data-documentation-published-project"] = project_id
+                labels["dataplex-data-documentation-published-location"] = args.location
+                labels["dataplex-data-documentation-published-scan"] = scan_id
+                ds_obj_lbl.labels = labels
+                bq_client.update_dataset(ds_obj_lbl, ["labels"])
+            except Exception:
+                pass
 
         # 2. Table-Level Data Documentation (Insights) Scan via gcloud for EVERY base table in parallel
         dataplex_table_overviews = {}
@@ -413,7 +492,7 @@ def cmd_data_insights(args):
             t_scan_id = existing_scans.get(("DATA_DOCUMENTATION", t_resource_uri)) or _make_scan_id("di", ds_id, t_name)
 
             if ("DATA_DOCUMENTATION", t_resource_uri) not in existing_scans:
-                subprocess.run(
+                _run_gcloud_retry(
                     [
                         "gcloud", "dataplex", "datascans", "create", "data-documentation", t_scan_id,
                         f"--project={project_id}",
@@ -423,16 +502,11 @@ def cmd_data_insights(args):
                         f"--data-source-resource={t_resource_uri}",
                         "--enable-catalog-publishing",
                         "--on-demand=true",
-                        "--async",
                         "--quiet",
-                    ],
-                    check=False,
-                    capture_output=True,
-                    text=True,
+                    ]
                 )
-                time.sleep(2)
             else:
-                subprocess.run(
+                _run_gcloud_retry(
                     [
                         "gcloud", "dataplex", "datascans", "update", "data-documentation", t_scan_id,
                         f"--project={project_id}",
@@ -440,33 +514,24 @@ def cmd_data_insights(args):
                         "--enable-catalog-publishing",
                         "--async",
                         "--quiet",
-                    ],
-                    check=False,
-                    capture_output=True,
-                    text=True,
+                    ]
                 )
 
-            subprocess.run(
-                [
-                    "gcloud", "dataplex", "datascans", "run", t_scan_id,
-                    f"--project={project_id}", f"--location={args.location}", "--quiet", "--format=json",
-                ],
-                check=False,
-                capture_output=True,
-                text=True,
+            _ensure_scan_job_triggered(
+                authed_session, project_id, args.location, t_scan_id,
+                scan_type="DATA_DOCUMENTATION", resource_uri=t_resource_uri,
             )
 
-            subprocess.run(
-                [
-                    "bq", "update",
-                    "--set_label", f"dataplex-data-documentation-published-project:{project_id}",
-                    "--set_label", f"dataplex-data-documentation-published-location:{args.location}",
-                    "--set_label", f"dataplex-data-documentation-published-scan:{t_scan_id}",
-                    f"{project_id}:{ds_id}.{t_name}",
-                ],
-                check=False,
-                capture_output=True,
-                text=True,
+            _set_bq_table_labels(
+                bq_client,
+                project_id,
+                ds_id,
+                t_name,
+                {
+                    "dataplex-data-documentation-published-project": project_id,
+                    "dataplex-data-documentation-published-location": args.location,
+                    "dataplex-data-documentation-published-scan": t_scan_id,
+                },
             )
 
             t_scan_full = authed_session.get(
@@ -482,7 +547,7 @@ def cmd_data_insights(args):
             }
             return t_name, t_scan_id, t_ov, t_cols
 
-        with ThreadPoolExecutor(max_workers=6) as pool:
+        with ThreadPoolExecutor(max_workers=3) as pool:
             futures = {pool.submit(_insight_one_table, t): t for t in ds_tables}
             for fut in as_completed(futures):
                 t_name, t_scan_id, t_ov, t_cols = fut.result()
