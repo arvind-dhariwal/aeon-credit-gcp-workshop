@@ -1,11 +1,10 @@
-# Track 1 (Notebook 03) Walkthrough: Fine-Grained Data Governance — RLS, IAM Data Governance Tags (CLS), Dynamic Data Masking & Business Glossary
+# Track 1 (Notebook 03) Walkthrough: Fine-Grained Data Governance — RLS, IAM Data Governance Tags (CLS), Dynamic Data Masking, Business Glossary & Custom Aspect Types
 
 **Notebook**: [`03_Governance_Security_and_Data_Quality.ipynb`](../notebook/03_Governance_Security_and_Data_Quality.ipynb)
-**Parked Modules Notebook (Can be discarded at end)**: [`03b_Parked_Dataplex_DLP_and_Data_Quality.ipynb`](../notebook/03b_Parked_Dataplex_DLP_and_Data_Quality.ipynb)
 **SQL Script**: [`03_bnm_rmit_pdpa_security.sql`](../sql/03_bnm_rmit_pdpa_security.sql)
-**Identity & CLS Provisioning Helpers**: [`setup_rls_cls_identities.py`](../scripts/setup_rls_cls_identities.py), [`setup_cls_data_governance_tags.py`](../scripts/setup_cls_data_governance_tags.py)
+**Identity & CLS Provisioning Helpers**: [`setup_rls_cls_identities.py`](../scripts/setup_rls_cls_identities.py), [`setup_cls_data_governance_tags.py`](../scripts/setup_cls_data_governance_tags.py), [`governance_helper.py`](../scripts/governance_helper.py)
 **Target Region**: `asia-southeast1` (Singapore)
-**ACSM RFP Clauses**: `C1.1.1.24`, `C1.1.5.3`, `C1.1.5.5`, `C1.1.2.2`, `C1.1.1.8`, `C1.1.1.10`
+**ACSM RFP Clauses**: `C1.1.1.24`, `C1.1.5.3`, `C1.1.5.5`, `C1.1.2.2`, `C1.1.1.4`, `C1.1.1.8`, `C1.1.1.10`
 
 ---
 
