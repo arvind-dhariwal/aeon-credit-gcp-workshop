@@ -1335,144 +1335,394 @@ def cmd_sdp_pii_scan(args):
 
 
 # ==============================================================================
-# MODULE 6: Custom Aspect Types & AI-Automated Aspect Tagging via Gemini
 # ==============================================================================
-def cmd_ai_catalog_governance(args):
-    project_id, authed_session, bq_client = get_clients(args.project, args.location)
-    aspect_id = "acsm-bnm-rmit-governance-aspect"
-    parent_url = f"https://dataplex.googleapis.com/v1/projects/{project_id}/locations/{args.location}/aspectTypes"
-    aspect_url = f"{parent_url}/{aspect_id}"
+# MODULE 6: Custom Aspect Types & Table/Column Aspect Tagging (RFP C1.1.1.8)
+# ==============================================================================
+COLUMN_SENSITIVITY_CATALOG = {
+    "cif_nm": (
+        "HIGH_PII_PDPA",
+        "Malaysian PDPA 2010 Sec 6 & BNM RMiT Sec 10",
+        "SHA256 Dynamic Data Masking (IAM Tag: pii_classification=customer_name)",
+        True,
+    ),
+    "cif_id": (
+        "MODERATE_IDENTIFIER",
+        "Malaysian PDPA 2010 & One-AEON Master CIF Policy",
+        "Retain for Internal Joins; Pseudonymize in Analytics Hub Clean Rooms",
+        True,
+    ),
+    "cif_no": (
+        "MODERATE_IDENTIFIER",
+        "Malaysian PDPA 2010 & One-AEON Master CIF Policy",
+        "Retain for Internal Joins; Pseudonymize in Analytics Hub Clean Rooms",
+        True,
+    ),
+    "b_netincome": (
+        "HIGH_CONFIDENTIAL_BNM_RMIT",
+        "BNM RMiT Sec 10 & Responsible Financing Guidelines",
+        "DEFAULT_MASKING_VALUE (0) for Non-Authorized Roles (pii_classification=financial_amount)",
+        True,
+    ),
+    "b_annualincome": (
+        "HIGH_CONFIDENTIAL_BNM_RMIT",
+        "BNM RMiT Sec 10 & Responsible Financing Guidelines",
+        "DEFAULT_MASKING_VALUE (0) for Non-Authorized Roles (pii_classification=financial_amount)",
+        True,
+    ),
+    "latest_ctos_score": (
+        "CONFIDENTIAL_CREDIT_BUREAU",
+        "Credit Reporting Agencies Act 2010 (CTOS) & BNM RMiT",
+        "Role-Restricted Credit Underwriting Access (pii_classification=credit_bureau_score)",
+        True,
+    ),
+    "ctos_score": (
+        "CONFIDENTIAL_CREDIT_BUREAU",
+        "Credit Reporting Agencies Act 2010 (CTOS) & BNM RMiT",
+        "Role-Restricted Credit Underwriting Access (pii_classification=credit_bureau_score)",
+        True,
+    ),
+    "state": (
+        "QUASI_IDENTIFIER_RLS",
+        "BNM Regional Branch Governance & Malaysian PDPA 2010",
+        "Row-Level Security (RLS) Predicate Filter by Malaysian State / Region",
+        False,
+    ),
+    "region": (
+        "QUASI_IDENTIFIER_RLS",
+        "BNM Regional Branch Governance & Malaysian PDPA 2010",
+        "Row-Level Security (RLS) Predicate Filter by Malaysian Region",
+        False,
+    ),
+    "homeaddr1": (
+        "HIGH_PII_PDPA",
+        "Malaysian PDPA 2010 Direct Residential Address Protection",
+        "Redact or Hash Residential Street Address in Analytical Views",
+        True,
+    ),
+    "homeaddr2": (
+        "HIGH_PII_PDPA",
+        "Malaysian PDPA 2010 Direct Residential Address Protection",
+        "Redact or Hash Residential Street Address in Analytical Views",
+        True,
+    ),
+    "homeaddr3": (
+        "HIGH_PII_PDPA",
+        "Malaysian PDPA 2010 Direct Residential Address Protection",
+        "Redact or Hash Residential Street Address in Analytical Views",
+        True,
+    ),
+    " _homeaddr1": (
+        "HIGH_PII_PDPA",
+        "Malaysian PDPA 2010 Direct Residential Address Protection",
+        "Redact or Hash Residential Street Address in Analytical Views",
+        True,
+    ),
+    "_homeaddr1": (
+        "HIGH_PII_PDPA",
+        "Malaysian PDPA 2010 Direct Residential Address Protection",
+        "Redact or Hash Residential Street Address in Analytical Views",
+        True,
+    ),
+    "_homeaddr2": (
+        "HIGH_PII_PDPA",
+        "Malaysian PDPA 2010 Direct Residential Address Protection",
+        "Redact or Hash Residential Street Address in Analytical Views",
+        True,
+    ),
+    "_homeaddr3": (
+        "HIGH_PII_PDPA",
+        "Malaysian PDPA 2010 Direct Residential Address Protection",
+        "Redact or Hash Residential Street Address in Analytical Views",
+        True,
+    ),
+    "n_age": (
+        "QUASI_IDENTIFIER_DEMOGRAPHIC",
+        "Malaysian PDPA 2010 & BNM Fair Treatment of Financial Consumers",
+        "Age-Bracket Generalization in External Clean Room Exports",
+        False,
+    ),
+    "unpaid_osp": (
+        "CONFIDENTIAL_CREDIT_EXPOSURE",
+        "BNM MFRS 9 Expected Credit Loss (ECL) & Collections Governance",
+        "Authorized Collections & Credit Risk Stewards Only",
+        False,
+    ),
+    "combined_unpaid_osp": (
+        "CONFIDENTIAL_CREDIT_EXPOSURE",
+        "BNM MFRS 9 Expected Credit Loss (ECL) & Collections Governance",
+        "Authorized Collections & Credit Risk Stewards Only",
+        False,
+    ),
+    "combined_unpaid_osp_myr": (
+        "CONFIDENTIAL_CREDIT_EXPOSURE",
+        "BNM MFRS 9 Expected Credit Loss (ECL) & Collections Governance",
+        "Authorized Collections & Credit Risk Stewards Only",
+        False,
+    ),
+    "new_dsr": (
+        "REGULATORY_UNDERWRITING_METRIC",
+        "BNM Responsible Financing Guidelines (Debt Service Ratio)",
+        "Audit-Logged Underwriting Feature (0-100% Validated Range)",
+        False,
+    ),
+    "avg_ep_dsr": (
+        "REGULATORY_UNDERWRITING_METRIC",
+        "BNM Responsible Financing Guidelines (Debt Service Ratio)",
+        "Audit-Logged Underwriting Feature (0-100% Validated Range)",
+        False,
+    ),
+}
 
-    # 1. Create Custom Aspect Type in Dataplex Universal Catalog
-    if authed_session.get(aspect_url).status_code == 404:
-        aspect_body = {
-            "displayName": "ACSM BNM RMiT & PDPA Governance Aspect",
-            "description": "Custom Dataplex Aspect Type for BNM RMiT criticality, PDPA PII status, Data Steward & AI Masking Recommendations",
-            "metadataTemplate": {
-                "name": "AcsmBnmRmitGovernanceTemplate",
-                "type": "record",
-                "recordFields": [
-                    {"name": "data_domain", "type": "string", "index": 1, "annotations": {"displayName": "Business Domain"}},
-                    {"name": "medallion_layer", "type": "string", "index": 2, "annotations": {"displayName": "Medallion Layer"}},
-                    {"name": "bnm_rmit_tier", "type": "string", "index": 3, "annotations": {"displayName": "BNM RMiT Tier"}},
-                    {"name": "pdpa_contains_pii", "type": "bool", "index": 4, "annotations": {"displayName": "Contains PDPA PII"}},
-                    {"name": "identified_pii_columns", "type": "string", "index": 5, "annotations": {"displayName": "Identified PII Columns"}},
-                    {"name": "recommended_masking_policy", "type": "string", "index": 6, "annotations": {"displayName": "Recommended Masking Policy"}},
-                    {"name": "data_steward", "type": "string", "index": 7, "annotations": {"displayName": "Data Steward Contact"}},
-                ],
-            },
-        }
-        authed_session.post(f"{parent_url}?aspectTypeId={aspect_id}", json=aspect_body)
 
-    # 2. Gather Schema + Module 5 SDP/DLP Findings and invoke Gemini
-    sdp_rows = list(
-        bq_client.query(
-            f"SELECT column_name, dlp_infotype, infotype_category, sensitivity_level, governance_action "
-            f"FROM `{project_id}.acsm_observability.sdp_pii_findings`"
-        ).result()
+def _infer_table_governance_metadata(ds_id: str, t_name: str, col_names: list, steward_email: str) -> dict:
+    """Builds accurate BNM RMiT & Malaysian PDPA Table-Level Aspect metadata for any workshop table."""
+    ds_lower = ds_id.lower()
+    t_lower = t_name.lower()
+    if "bronze" in ds_lower:
+        medallion = "BRONZE_RAW_INGESTION"
+        tier = "TIER_1_RAW_LANDING"
+    elif "silver" in ds_lower:
+        medallion = "SILVER_CURATED_CONFORMED"
+        tier = "TIER_1_CURATED_REGULATORY"
+    elif "gold" in ds_lower:
+        medallion = "GOLD_ENTERPRISE_FEATURE_STORE"
+        tier = "TIER_1_CRITICAL_REGULATORY"
+    else:
+        medallion = "EXTERNAL_PARTNER_CLEAN_ROOM"
+        tier = "TIER_2_PARTNER_EXCHANGE"
+
+    if "collection" in t_lower:
+        domain = "ACSM Collections & Delinquency Recovery"
+    elif "judge" in t_lower or "underwriting" in t_lower:
+        domain = "ACSM Credit Underwriting & BNM DSR Assessment"
+    elif "sales" in t_lower or "merchant" in t_lower or "retail" in ds_lower:
+        domain = "One-AEON Merchant Ecosystem & Sales Transactions"
+    elif "graph" in t_lower:
+        domain = "ACSM Credit Ecosystem Property Graph (ISO GQL)"
+    elif "ml" in t_lower or "prediction" in t_lower:
+        domain = "ACSM Vertex AI & BQML Propensity Scoring"
+    else:
+        domain = "One-AEON Customer 360 & Master CIF Profile"
+
+    matched_pii_cols = [c for c in col_names if c.lower() in COLUMN_SENSITIVITY_CATALOG]
+    has_direct_pii = any(
+        COLUMN_SENSITIVITY_CATALOG[c.lower()][3] for c in matched_pii_cols
     )
-    sdp_summary = [dict(r) for r in sdp_rows]
-    tbl_obj = bq_client.get_table(f"{project_id}.acsm_gold.gold_aeon_customer360_profile")
-    schema_summary = [{"name": f.name, "type": f.field_type} for f in tbl_obj.schema]
+    if matched_pii_cols:
+        masking_summary = "; ".join(
+            sorted({COLUMN_SENSITIVITY_CATALOG[c.lower()][2].split(" (")[0] for c in matched_pii_cols})
+        )
+    else:
+        masking_summary = "Standard RBAC Dataset Access Control (No Direct PDPA PII Columns)"
 
-    from google import genai
-    from google.genai import types
-
-    client = genai.Client(vertexai=True, project=project_id, location="us-central1")
-    prompt = f"""You are the Automated Aspect Data Governance Agent for AEON Credit Service Malaysia (ACSM).
-Given the Dataplex Custom Aspect Type `{aspect_id}`, the schema of `acsm_gold.gold_aeon_customer360_profile`, and the Sensitive Data Protection (Cloud DLP) scan findings:
-- Schema: {json.dumps(schema_summary)}
-- DLP Findings: {json.dumps(sdp_summary)}
-- Active Steward Email: {args.user_email}
-
-Generate structured JSON aspect values for `acsm_gold.gold_aeon_customer360_profile` with keys:
-`data_domain`, `medallion_layer`, `bnm_rmit_tier`, `pdpa_contains_pii` (boolean), `identified_pii_columns`, `recommended_masking_policy`, `data_steward`."""
-
-    resp = client.models.generate_content(
-        model="gemini-2.5-flash",
-        contents=prompt,
-        config=types.GenerateContentConfig(response_mime_type="application/json", temperature=0.1),
-    )
-    ai_aspect_data = json.loads(resp.text)
-
-    # 3. Attach Custom Aspect to the BigQuery Table's Dataplex Entry
-    entry_name = (
-        f"projects/{project_id}/locations/{args.location}/entryGroups/@bigquery/entries/"
-        f"bigquery.googleapis.com/projects/{project_id}/datasets/acsm_gold/tables/gold_aeon_customer360_profile"
-    )
-    aspect_key = f"{project_id}.{args.location}.{aspect_id}"
-    patch_body = {
-        "aspects": {
-            aspect_key: {
-                "aspectType": f"projects/{project_id}/locations/{args.location}/aspectTypes/{aspect_id}",
-                "data": ai_aspect_data,
-            }
-        }
+    return {
+        "data_domain": domain,
+        "medallion_layer": medallion,
+        "bnm_rmit_tier": tier,
+        "pdpa_contains_pii": bool(has_direct_pii or matched_pii_cols),
+        "identified_pii_columns": ", ".join(matched_pii_cols) if matched_pii_cols else "None (Aggregated / Non-PII)",
+        "recommended_masking_policy": masking_summary,
+        "data_steward": steward_email,
     }
-    authed_session.patch(
-        f"https://dataplex.googleapis.com/v1/{entry_name}?aspectKeys={aspect_key}&updateMask=aspects",
-        json=patch_body,
+
+
+def cmd_aspect_types(args):
+    project_id, authed_session, bq_client = get_clients(args.project, args.location)
+    target_datasets = [
+        d.strip() for d in getattr(args, "datasets", DEFAULT_WORKSHOP_DATASETS).split(",") if d.strip()
+    ]
+    user_email = (
+        getattr(args, "user_email", None)
+        or os.environ.get("USER_EMAIL", "").strip()
+        or "credit-governance-steward@aeoncredit.com.my"
     )
 
-    # 4. Also attach standardized BNM RMiT & PDPA Governance Labels across Bronze, Silver & Gold
-    #    and persist the AI-generated Custom Aspect payload into `acsm_observability.dataplex_ai_catalog_aspects`
-    data_domain = str(ai_aspect_data.get("data_domain", "One-AEON Customer 360 & Credit Risk")).replace("'", "")
-    medallion_layer = str(ai_aspect_data.get("medallion_layer", "GOLD_ENTERPRISE_FEATURE_STORE")).replace("'", "")
-    bnm_rmit_tier = str(ai_aspect_data.get("bnm_rmit_tier", "TIER_1_CRITICAL_REGULATORY")).replace("'", "")
-    pdpa_contains_pii = bool(ai_aspect_data.get("pdpa_contains_pii", True))
-    identified_pii_columns = str(ai_aspect_data.get("identified_pii_columns", "CIF_NM, CIF_ID, B_NetIncome, State")).replace("'", "")
-    recommended_masking = str(ai_aspect_data.get("recommended_masking_policy", "SHA256 on CIF_NM; DEFAULT_MASKING_VALUE (0) on B_NetIncome; State RLS")).replace("'", "")
-    data_steward = str(ai_aspect_data.get("data_steward", args.user_email)).replace("'", "")
+    proj_r = authed_session.get(f"https://cloudresourcemanager.googleapis.com/v1/projects/{project_id}")
+    project_number = str(proj_r.json().get("projectNumber", "")) if proj_r.status_code == 200 else ""
+    if not project_number:
+        p_proc = subprocess.run(
+            ["gcloud", "projects", "describe", project_id, "--format=value(projectNumber)"],
+            check=False, capture_output=True, text=True,
+        )
+        project_number = p_proc.stdout.strip() or project_id
 
-    label_sql = f"""
-    CREATE SCHEMA IF NOT EXISTS `{project_id}.acsm_observability`
-    OPTIONS (location = '{args.location}');
+    tbl_aspect_id = "acsm-bnm-rmit-governance-aspect"
+    col_aspect_id = "acsm-pdpa-column-sensitivity-aspect"
+    parent_url = f"https://dataplex.googleapis.com/v1/projects/{project_id}/locations/{args.location}/aspectTypes"
 
-    CREATE OR REPLACE TABLE `{project_id}.acsm_observability.dataplex_ai_catalog_aspects`
-    OPTIONS (description = 'AI-Automated Dataplex Custom Governance Aspect values generated by Gemini 2.5 Flash + Cloud DLP findings (RFP C1.1.1.8).') AS
-    SELECT
-      CURRENT_TIMESTAMP() AS tagged_at,
-      '{aspect_id}' AS custom_aspect_type_id,
-      '{project_id}.acsm_gold.gold_aeon_customer360_profile' AS target_table,
-      '{data_domain}' AS data_domain,
-      '{medallion_layer}' AS medallion_layer,
-      '{bnm_rmit_tier}' AS bnm_rmit_tier,
-      {str(pdpa_contains_pii).upper()} AS pdpa_contains_pii,
-      '{identified_pii_columns}' AS identified_pii_columns,
-      '{recommended_masking}' AS recommended_masking_policy,
-      '{data_steward}' AS data_steward;
+    print("==========================================================================", flush=True)
+    print(f"🏛️ [Step 1.7] Provisioning Custom Aspect Types & Attaching Table/Column Aspects: {target_datasets}", flush=True)
+    print("==========================================================================", flush=True)
 
-    ALTER SCHEMA `{project_id}.acsm_bronze` SET OPTIONS (
-      labels = [('medallion_layer', 'bronze'), ('bnm_rmit_tier', 'tier_1_raw_landing'), ('residency', 'asia_southeast1_sg')]
-    );
-    ALTER TABLE `{project_id}.acsm_gold.gold_aeon_customer360_profile` SET OPTIONS (
-      labels = [
-        ('medallion_layer', 'gold'),
-        ('data_domain', 'aeon360_customer_risk'),
-        ('bnm_rmit_tier', 'tier_1_critical'),
-        ('pdpa_contains_pii', 'true'),
-        ('dataplex-dp-published-project', '{project_id}'),
-        ('dataplex-dp-published-location', '{args.location}'),
-        ('dataplex-dp-published-scan', 'acsm-gold-customer360-profile-scan'),
-        ('dataplex-dq-published-project', '{project_id}'),
-        ('dataplex-dq-published-location', '{args.location}'),
-        ('dataplex-dq-published-scan', 'acsm-gold-customer360-quality-scan')
-      ]
-    );
-    """
-    bq_client.query(label_sql).result()
+    def _wait_lro(resp):
+        if resp.status_code in (200, 201):
+            op_name = resp.json().get("name", "")
+            if op_name and "/operations/" in op_name:
+                for _ in range(15):
+                    opr = authed_session.get(f"https://dataplex.googleapis.com/v1/{op_name}")
+                    if opr.status_code == 200 and opr.json().get("done"):
+                        break
+                    time.sleep(1)
 
-    print("==========================================================================")
-    print(f"🏛️ [Module 6 Outcome] Custom Aspect Type + AI-Automated Aspect Tagging (`{aspect_id}`)")
-    print("==========================================================================")
-    print(f"  • Dataplex Custom Aspect Type : `projects/{project_id}/locations/{args.location}/aspectTypes/{aspect_id}`")
-    print(f"  • Target Catalog Entry        : `acsm_gold.gold_aeon_customer360_profile`")
-    print(f"  • Observability Audit Table   : `{project_id}.acsm_observability.dataplex_ai_catalog_aspects`")
-    print("  • Gemini + DLP Auto-Populated Aspect Payload:")
-    for k, v in ai_aspect_data.items():
-        print(f"      - {k:<28}: {v}")
-    print("  👉 UI Verification: Dataplex Universal Catalog -> Search -> `gold_aeon_customer360_profile` -> `Tags & Aspects`")
-    print("==========================================================================")
+    # 1. Create or Update Table-Level Custom Aspect Type (`acsm-bnm-rmit-governance-aspect`)
+    tbl_aspect_body = {
+        "displayName": "ACSM BNM RMiT & PDPA Governance Aspect",
+        "description": "Table-level Dataplex Aspect Type for BNM RMiT criticality, Medallion Layer, PDPA PII status, Data Steward & Masking Policy",
+        "metadataTemplate": {
+            "name": "AcsmBnmRmitGovernanceTemplate",
+            "type": "record",
+            "recordFields": [
+                {"name": "data_domain", "type": "string", "index": 1, "annotations": {"displayName": "Business Domain"}},
+                {"name": "medallion_layer", "type": "string", "index": 2, "annotations": {"displayName": "Medallion Layer"}},
+                {"name": "bnm_rmit_tier", "type": "string", "index": 3, "annotations": {"displayName": "BNM RMiT Tier"}},
+                {"name": "pdpa_contains_pii", "type": "bool", "index": 4, "annotations": {"displayName": "Contains PDPA PII"}},
+                {"name": "identified_pii_columns", "type": "string", "index": 5, "annotations": {"displayName": "Identified PII / Regulatory Columns"}},
+                {"name": "recommended_masking_policy", "type": "string", "index": 6, "annotations": {"displayName": "Recommended Masking Policy"}},
+                {"name": "data_steward", "type": "string", "index": 7, "annotations": {"displayName": "Data Steward Contact"}},
+            ],
+        },
+    }
+    if authed_session.get(f"{parent_url}/{tbl_aspect_id}").status_code == 404:
+        r1 = authed_session.post(f"{parent_url}?aspectTypeId={tbl_aspect_id}", json=tbl_aspect_body)
+        _wait_lro(r1)
+        print(f"  ✅ Created Table-Level Aspect Type : `{tbl_aspect_id}`", flush=True)
+    else:
+        print(f"  ℹ️ Verified Table-Level Aspect Type: `{tbl_aspect_id}`", flush=True)
+
+    # 2. Create or Update Column-Level Custom Aspect Type (`acsm-pdpa-column-sensitivity-aspect`)
+    col_aspect_body = {
+        "displayName": "ACSM PDPA & BNM Column Sensitivity Aspect",
+        "description": "Column-level Dataplex Aspect Type capturing Malaysian PDPA 2010 PII sensitivity, BNM RMiT classification, and masking rule",
+        "metadataTemplate": {
+            "name": "AcsmPdpaColumnSensitivityTemplate",
+            "type": "record",
+            "recordFields": [
+                {"name": "sensitivity_level", "type": "string", "index": 1, "annotations": {"displayName": "PDPA / BNM Sensitivity Level"}},
+                {"name": "regulatory_framework", "type": "string", "index": 2, "annotations": {"displayName": "Regulatory Framework"}},
+                {"name": "masking_rule", "type": "string", "index": 3, "annotations": {"displayName": "BigQuery Masking / Security Rule"}},
+                {"name": "contains_direct_pii", "type": "bool", "index": 4, "annotations": {"displayName": "Contains Direct Personal Data"}},
+            ],
+        },
+    }
+    if authed_session.get(f"{parent_url}/{col_aspect_id}").status_code == 404:
+        r2 = authed_session.post(f"{parent_url}?aspectTypeId={col_aspect_id}", json=col_aspect_body)
+        _wait_lro(r2)
+        print(f"  ✅ Created Column-Level Aspect Type: `{col_aspect_id}`", flush=True)
+    else:
+        print(f"  ℹ️ Verified Column-Level Aspect Type: `{col_aspect_id}`", flush=True)
+
+    # 3. Discover all base tables across target datasets & attach Table + Column Aspects
+    audit_rows = []
+    total_tables_tagged = 0
+    total_columns_tagged = 0
+    tbl_key = f"{project_number}.{args.location}.{tbl_aspect_id}"
+    tbl_aspect_type_path = f"projects/{project_number}/locations/{args.location}/aspectTypes/{tbl_aspect_id}"
+    col_aspect_type_path = f"projects/{project_number}/locations/{args.location}/aspectTypes/{col_aspect_id}"
+
+    for ds_id in target_datasets:
+        try:
+            rows = list(
+                bq_client.query(
+                    f"SELECT table_name FROM `{project_id}.{ds_id}.INFORMATION_SCHEMA.TABLES` "
+                    f"WHERE table_type = 'BASE TABLE' ORDER BY table_name"
+                ).result()
+            )
+        except Exception as exc:
+            print(f"  ⚠️ Skipping dataset `{ds_id}` ({exc})", flush=True)
+            continue
+
+        for r in rows:
+            t_name = r.table_name
+            tbl_obj = bq_client.get_table(f"{project_id}.{ds_id}.{t_name}")
+            col_names = [f.name for f in tbl_obj.schema]
+            tbl_meta = _infer_table_governance_metadata(ds_id, t_name, col_names, user_email)
+
+            aspects_payload = {
+                tbl_key: {
+                    "aspectType": tbl_aspect_type_path,
+                    "data": tbl_meta,
+                }
+            }
+            aspect_keys_param = [tbl_key]
+            tagged_cols_for_table = []
+
+            for c_name in col_names:
+                c_low = c_name.lower()
+                if c_low in COLUMN_SENSITIVITY_CATALOG:
+                    sens_level, reg_fw, mask_rule, is_pii = COLUMN_SENSITIVITY_CATALOG[c_low]
+                    c_key = f"{project_number}.{args.location}.{col_aspect_id}@Schema.{c_name}"
+                    aspects_payload[c_key] = {
+                        "aspectType": col_aspect_type_path,
+                        "path": f"Schema.{c_name}",
+                        "data": {
+                            "sensitivity_level": sens_level,
+                            "regulatory_framework": reg_fw,
+                            "masking_rule": mask_rule,
+                            "contains_direct_pii": is_pii,
+                        },
+                    }
+                    aspect_keys_param.append(c_key)
+                    tagged_cols_for_table.append(c_name)
+
+            entry_name = (
+                f"projects/{project_id}/locations/{args.location}/entryGroups/@bigquery/entries/"
+                f"bigquery.googleapis.com/projects/{project_id}/datasets/{ds_id}/tables/{t_name}"
+            )
+            keys_qs = "&".join(f"aspectKeys={k}" for k in aspect_keys_param)
+            patch_r = authed_session.patch(
+                f"https://dataplex.googleapis.com/v1/{entry_name}?updateMask=aspects&deleteMissingAspects=false&{keys_qs}",
+                json={"aspects": aspects_payload},
+            )
+            if patch_r.status_code == 200:
+                total_tables_tagged += 1
+                total_columns_tagged += len(tagged_cols_for_table)
+                col_summary = f"{len(tagged_cols_for_table)} col aspects ({', '.join(tagged_cols_for_table)})" if tagged_cols_for_table else "0 col aspects"
+                print(
+                    f"  ✅ Attached Table + Column Aspects: `{ds_id}.{t_name}` [{tbl_meta['bnm_rmit_tier']} | {col_summary}]",
+                    flush=True,
+                )
+            else:
+                print(
+                    f"  ⚠️ Failed to attach aspects on `{ds_id}.{t_name}` (HTTP {patch_r.status_code}): {patch_r.text[:200]}",
+                    flush=True,
+                )
+
+            audit_rows.append({
+                "tagged_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                "custom_aspect_type_id": tbl_aspect_id,
+                "column_aspect_type_id": col_aspect_id,
+                "target_table": f"{project_id}.{ds_id}.{t_name}",
+                "data_domain": tbl_meta["data_domain"],
+                "medallion_layer": tbl_meta["medallion_layer"],
+                "bnm_rmit_tier": tbl_meta["bnm_rmit_tier"],
+                "pdpa_contains_pii": tbl_meta["pdpa_contains_pii"],
+                "identified_pii_columns": tbl_meta["identified_pii_columns"],
+                "column_aspects_attached": len(tagged_cols_for_table),
+                "recommended_masking_policy": tbl_meta["recommended_masking_policy"],
+                "data_steward": tbl_meta["data_steward"],
+            })
+
+    # 4. Persist audit table in `acsm_observability.dataplex_ai_catalog_aspects`
+    bq_client.query(
+        f"CREATE SCHEMA IF NOT EXISTS `{project_id}.acsm_observability` OPTIONS (location = '{args.location}');"
+    ).result()
+    if audit_rows:
+        audit_table_id = f"{project_id}.acsm_observability.dataplex_ai_catalog_aspects"
+        job_cfg = bigquery.LoadJobConfig(write_disposition="WRITE_TRUNCATE")
+        bq_client.load_table_from_json(audit_rows, audit_table_id, job_config=job_cfg).result()
+
+    print("--------------------------------------------------------------------------", flush=True)
+    print(f"  • Table-Level Aspect Type  : `projects/{project_id}/locations/{args.location}/aspectTypes/{tbl_aspect_id}`", flush=True)
+    print(f"  • Column-Level Aspect Type : `projects/{project_id}/locations/{args.location}/aspectTypes/{col_aspect_id}`", flush=True)
+    print(f"  • Total Tables Tagged      : {total_tables_tagged} tables across {len(target_datasets)} datasets", flush=True)
+    print(f"  • Total Columns Tagged     : {total_columns_tagged} sensitive/regulatory columns (`@Schema.<column>`)", flush=True)
+    print(f"  • Observability Audit Table: `{project_id}.acsm_observability.dataplex_ai_catalog_aspects`", flush=True)
+    print(f"  👉 View Aspect Types in Console: https://console.cloud.google.com/dataplex/govern/aspect-types?project={project_id}", flush=True)
+    print("  👉 UI Verification: BigQuery Studio / Knowledge Catalog -> Open ANY table -> `Details` (Table Aspect) & `Schema` (Column Aspects)", flush=True)
+    print("==========================================================================", flush=True)
+
+
+cmd_ai_catalog_governance = cmd_aspect_types
 
 
 # ==============================================================================
@@ -1593,6 +1843,7 @@ def main():
         "data-quality",
         "data-discovery",
         "sdp-pii-scan",
+        "aspect-types",
         "ai-catalog-governance",
         "setup-cls-masking",
         "reset-security-policies",
@@ -1602,10 +1853,12 @@ def main():
         sp = subparsers.add_parser(cmd_name)
         sp.add_argument("--project", required=True, help="GCP Project ID")
         sp.add_argument("--location", default="asia-southeast1", help="GCP Region")
-        if cmd_name in ("data-profile", "data-insights"):
+        if cmd_name in ("data-profile", "data-insights", "aspect-types", "ai-catalog-governance"):
             sp.add_argument("--datasets", default=DEFAULT_WORKSHOP_DATASETS, help="Comma-separated dataset IDs")
-        if cmd_name in ("setup-cls-masking", "ai-catalog-governance"):
+        if cmd_name == "setup-cls-masking":
             sp.add_argument("--user-email", required=True, help="Active workshop user email")
+        elif cmd_name in ("aspect-types", "ai-catalog-governance"):
+            sp.add_argument("--user-email", default="", help="Optional Data Steward email")
 
     args = parser.parse_args()
     dispatch = {
@@ -1615,7 +1868,8 @@ def main():
         "data-quality": cmd_data_quality,
         "data-discovery": cmd_data_discovery,
         "sdp-pii-scan": cmd_sdp_pii_scan,
-        "ai-catalog-governance": cmd_ai_catalog_governance,
+        "aspect-types": cmd_aspect_types,
+        "ai-catalog-governance": cmd_aspect_types,
         "setup-cls-masking": cmd_setup_cls_masking,
         "reset-security-policies": cmd_reset_security_policies,
         "finops-telemetry": cmd_finops_telemetry,
@@ -1625,3 +1879,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+

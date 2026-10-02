@@ -57,6 +57,9 @@ flowchart TB
 | **Step 1.4** | `%%bigquery` | Policy & Tag Reset | **1-Click Pure SQL Security Reset (`DROP ALL ROW ACCESS POLICIES` + `ALTER COLUMN ... SET OPTIONS (data_governance_tags=[])`)**: Removes both Row Access Policies and all 4 Column Data Governance Tags on `acsm_gold.gold_aeon_customer360_profile`, restoring all **`100,000` unmasked customers across all `16` Malaysian states** for downstream Notebooks 04–05 and Tracks 2–4. |
 | **Step 1.5a** | Python (`sync_business_glossary.py`) | Catalog Sync | Reads [`business_glossary_acsm.yaml` ↗](https://github.com/arvind-dhariwal/aeon-credit-gcp-workshop/blob/main/track1_platform_governance/scripts/business_glossary_acsm.yaml), provisions/updates the Dataplex Business Glossary (`acsm-enterprise-credit-glossary`), 4 Categories, and 10 Terms in `asia-southeast1`, and materializes `acsm_gold.business_glossary_catalog`. |
 | **Step 1.5b** | `%%bigquery` | **User 1 (`user:<USER_EMAIL>`)** | Queries all **10 standardized ACSM business terms**, their categories, synonyms, linked BigQuery columns, and assigned data stewards in pure BigQuery SQL. |
+| **Step 1.6a** | Python (`governance_helper.py data-profile` & `data-insights`) | Dataplex Scans | Auto-populates **Dataplex Data Profile** (`DATA_PROFILE`) and **AI Data Insights** (`DATA_DOCUMENTATION`) scans, BigQuery published labels, and 100% of table/column descriptions across every workshop table. |
+| **Step 1.7a** | Python (`governance_helper.py aspect-types`) | Dataplex Aspect Types | Provisions two Custom Aspect Types in Dataplex Universal Catalog — **Table-Level** (`acsm-bnm-rmit-governance-aspect`) and **Column-Level** (`acsm-pdpa-column-sensitivity-aspect`) — and attaches them across all base tables and sensitive/regulatory columns (`@Schema.<column>`). |
+| **Step 1.7b** | `%%bigquery` | **User 1 (`user:<USER_EMAIL>`)** | Queries `acsm_observability.dataplex_ai_catalog_aspects` to inspect the Medallion Layer, BNM RMiT Tier, PDPA PII status, and attached column-level aspect counts across every table. |
 
 ---
 
@@ -209,3 +212,20 @@ In Google Cloud **Dataplex Universal Catalog (Knowledge Catalog)**, a **Business
 2. **Attach Terms to Physical BigQuery Columns (`3 Mins`)**: Open `acsm_gold.gold_aeon_customer360_profile` $\rightarrow$ **Schema** tab, select `avg_ep_dsr`, `ep_unpaid_osp`, and `B_NetIncome`, and click **Add business term** to attach **`Debt Service Ratio (DSR %)`**, **`Unpaid Outstanding Principal (OSP MYR)`**, and **`BNM Household Income Tier (B40 / M40 / T20)`**.
 3. **Demonstrate Semantic Search by Business Concept (`2 Mins`)**: Search `"Delinquent Principal Exposure"` or `"Debt Service Ratio"` in **Knowledge Catalog Search** (`https://console.cloud.google.com/dataplex/dp-search`) and show how `acsm_gold.gold_aeon_customer360_profile` surfaces immediately via its attached glossary term even though the physical columns are named `ep_unpaid_osp` and `avg_ep_dsr`.
 4. **Connect Glossary to IAM Data Governance Tag CLS Masking & Conversational Analytics (`3 Mins`)**: Show how Category 1 terms (`Customer Information File ID` & `BNM Household Income Tier`) align with the IAM Data Governance Tag (`<PROJECT_ID>/pii_classification`) dynamic masking policies in **Step 1.3** on `acsm_gold.gold_aeon_customer360_profile`, and how the 10 attached terms are automatically ingested by **BigQuery Conversational Analytics (`BQCA`)** in Track 1 Notebook 05 and Track 3.
+
+---
+
+## 4. Custom Aspect Types & Table / Column Aspect Tagging (`Step 1.7` — `RFP C1.1.1.8`)
+
+While **IAM Data Governance Tags** (`purpose=DATA_GOVERNANCE` in **Step 1.3**) enforce query-time access control and dynamic masking, **Dataplex Custom Aspect Types** attach rich, structured business and regulatory metadata at both the **Table level** and the **Column level (`@Schema.<column>`)**:
+
+1. **Table-Level Custom Aspect Type (`acsm-bnm-rmit-governance-aspect`)**:
+   - **Fields**: `data_domain`, `medallion_layer`, `bnm_rmit_tier`, `pdpa_contains_pii`, `identified_pii_columns`, `recommended_masking_policy`, `data_steward`.
+   - **Attached To**: Every base table across `acsm_bronze`, `acsm_silver`, `acsm_gold`, `aeon_retail`, and `acsm_subscribed_data`.
+2. **Column-Level Custom Aspect Type (`acsm-pdpa-column-sensitivity-aspect`)**:
+   - **Fields**: `sensitivity_level`, `regulatory_framework`, `masking_rule`, `contains_direct_pii`.
+   - **Attached To**: Sensitive PII and regulatory columns (`@Schema.CIF_NM`, `@Schema.CIF_ID`, `@Schema.B_NetIncome`, `@Schema.B_AnnualIncome`, `@Schema.latest_ctos_score`, `@Schema.State`, `@Schema.Region`, `@Schema.Unpaid_OSP`, `@Schema.avg_ep_dsr`, etc.) across all tables.
+3. **Where to Verify in Google Cloud Console**:
+   - **Aspect Types Catalog**: `https://console.cloud.google.com/dataplex/govern/aspect-types?project=<PROJECT_ID>`
+   - **Table & Column Aspects**: Open any table (e.g., `acsm_gold.gold_aeon_customer360_profile`) in **Dataplex Universal Catalog (Knowledge Catalog)** or **BigQuery Studio** $\rightarrow$ inspect **Details / Tags & Aspects** for the Table-Level Aspect and **Schema** for the Column-Level Aspects.
+
